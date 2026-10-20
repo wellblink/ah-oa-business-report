@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         安徽OA · 亳州经营报表 XLSX
 // @namespace    local.ahoa.bozhou.report
-// @version      1.3.4
+// @version      1.4.0-beta.1
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -11,11 +11,11 @@
 // @grant        unsafeWindow
 // @grant        GM_getValue
 // @grant        GM_setValue
-// @grant        GM_getTab
-// @grant        GM_saveTab
 // @grant        GM_addValueChangeListener
 // @grant        GM_registerMenuCommand
-// @grant        GM_openInTab
+// @grant        GM_xmlhttpRequest
+// @grant        GM_cookie
+// @connect      tsfx-eda.anhuitelecom.com
 // @sandbox      raw
 // @run-at       document-idle
 // @noframes
@@ -24,8 +24,7 @@
 (function () {
   'use strict';
   const W = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
-  const KEY = 'ahoa.export.job.v1';
-  const APP = 'http://portal.mss.anhuitelecom.com:12104/idealprotalview/application?subscript=2';
+  const KEY = 'ahoa.export.job.api.v1';
   const REPORTS = {
     promo:{name:'大促发展日报（五级）',id:'vbap878e0411e1dc07938c4aa5a0',system:'每日重点经营关注',cols:73,headers:3,latn:'本地网',dates:['开始时间','结束时间'],filters:['客户群','分团队','发展渠道','四级单元类型','是否星客']},
     million4:{name:'百天百万路攻坚（四级）',id:'vbapfe346f0637978fa3da47fd50',system:'企业数据仓库',cols:25,headers:2,latn:'地市',range:'日期',filters:['三级单元名称','四级单元名称','渠道','条线'],summary:'bottom',dimensions:5},
@@ -33,7 +32,6 @@
     value4:{name:'价值积分（四级）',id:'vbap2f5cb8d9c5be7d9bc4a377fd',system:'每日重点经营关注',cols:54,headers:3,latn:'本地网',dates:['开始日期','结束日期'],filters:['客户群','渠道','是否存量','四级类型'],summary:'top',dimensions:5}
   };
   const reportOf = job => REPORTS[job?.reportKey || 'promo'];
-  const dashboardId = () => new URL(W.location.href).searchParams.get('dashboardId');
   const PAGE_SIZE = 500;
   const TTL = 30 * 60 * 1000;
   const D = W.document;
@@ -76,13 +74,11 @@
   const $ = s => root.querySelector(s);
   $('#reportType').value=GM_getValue('ahoa.export.report','promo');
   if(!REPORTS[$('#reportType').value]) $('#reportType').value='promo';
-  let busy = false, cancelled = false, lastFile = null, currentJob = null, autoNavTab=false;
-  const fallbackTabs=[];
+  let busy = false, cancelled = false, lastFile = null, currentJob = null;
   const readJob = () => GM_getValue(KEY, null);
   const isLive = j => j && Date.now() - j.created < TTL && !['done','error','cancelled'].includes(j.stage);
   const saveJob = j => { GM_setValue(KEY, j); currentJob = j; return j; };
   const updateJob = (j, patch) => saveJob({...j, ...patch, updated:Date.now()});
-  const tabState = () => new Promise(resolve => GM_getTab(resolve));
   const isoDate=d=>`${String(d.getFullYear()).padStart(4,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   let calendarTarget=null, calendarMonth=null, calendarFocus=null;
   function closeCalendar(focus=false){
@@ -227,16 +223,6 @@
   function check() {
     if (cancelled || (currentJob && readJob()?.id!==currentJob.id) || readJob()?.stage==='cancelled') throw new Error('已停止导出，未生成不完整文件。');
   }
-  async function waitFor(fn, label, ms=60000) {
-    const end=Date.now()+ms;
-    while(Date.now()<end){ check(); const result=fn(); if(result) return result; await new Promise(r=>setTimeout(r,350)); }
-    throw new Error(`等待${label}超时。请检查登录状态或页面是否改版。`);
-  }
-  async function timed(promise, label) {
-    let timer;
-    try { return await Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`${label}超过120秒，已停止。请稍后重新导出。`)),120000);})]); }
-    finally { clearTimeout(timer); }
-  }
   function download(file) {
     const a=D.createElement('a'), url=URL.createObjectURL(file.blob);
     a.href=url; a.download=file.name; D.body.append(a); a.click(); a.remove();
@@ -248,266 +234,179 @@
     W.console?.warn('[经营报表导出]',detail);
     setBusy(false); show(); status(message,!cancelled);
   }
-  // Keep the portal's two-step SSO intact: the source page must stay alive for
-  // its delayed second window.open. Reuse one named target for each SSO stage.
-  function trackPopups(job,stage) {
-    const original=W.open;
-    const replacement=function(url,_target,features){
-      if(url && url!=='about:blank') {
-        const u=new URL(String(url),W.location.href);
-        if(!/^https?:$/.test(u.protocol) || !/(^|\.)anhuitelecom\.com$/.test(u.hostname)) throw new Error('页面跳转到了未知站点，已停止自动导航。');
-      }
-      const child=original.call(W,url,`ahoa-${stage}-${job.id}`,features);
-      if(child) return child;
-      const fallback=GM_openInTab(String(url),{active:true,insert:true,setParent:true});
-      fallbackTabs.push(fallback);
-      status('正在通过篡改猴打开认证页面…');
-      return fallback;
-    };
-    W.open=replacement;
-    const restore=()=>{if(W.open===replacement)W.open=original;};
-    setTimeout(restore,30000);
-    return restore;
+  const REPORT_ORIGIN='http://tsfx-eda.anhuitelecom.com:12110';
+  const API=REPORT_ORIGIN+'/datasience/vbap3/';
+  let activeRequest=null;
+  const clone=value=>JSON.parse(JSON.stringify(value));
+  const labelOf=q=>String(q.set?.alias||q.name||'').replace(/[\s:：]/g,'');
+  function authError(){return new Error('登录已失效或当前工号没有报表权限，请重新登录后再试。');}
+  function requestJSON(url,body,session){
+    check();
+    const target=new URL(url);
+    if(target.origin!==REPORT_ORIGIN || !/^\/datasience\/(?:vbap3\/(?:api\/results\/vbap[a-f0-9]+|dashboard\/component\/find|query\/data\/)|management\/sysUserInfo\/getUnionUserInfo)$/.test(target.pathname)) throw new Error('接口地址不在允许的查询范围内。');
+    return new Promise((resolve,reject)=>{
+      let settled=false,handle,timer;
+      const finish=(err,value)=>{if(settled)return;settled=true;clearTimeout(timer);if(activeRequest===handle)activeRequest=null;err?reject(err):resolve(value);};
+      timer=setTimeout(()=>{finish(new Error('接口查询超时。'));handle?.abort();},120000);
+      let raw;
+      handle={abort:()=>{finish(new Error('已停止导出。'));raw?.abort();}};
+      activeRequest=handle;
+      try{raw=GM_xmlhttpRequest({redirect:'error',method:body===undefined?'GET':'POST',url:target.href,timeout:120000,responseType:'text',headers:{'Content-Type':'application/json',guid:session.guid,token:session.token},...(body===undefined?{}:{data:JSON.stringify(body)}),
+        onload:r=>{
+          try{
+            check();
+            if([401,403].includes(r.status))throw authError();
+            if(r.status<200||r.status>=300)throw new Error(`查询接口 HTTP ${r.status}。`);
+            if(r.finalUrl&&new URL(r.finalUrl).origin!==REPORT_ORIGIN)throw authError();
+            let data;try{data=JSON.parse(r.responseText);}catch(_){throw new Error('接口未返回 JSON，请检查内网连接或登录状态。');}
+            if(data.code!=null&&Number(data.code)!==1000)throw authError();
+            finish(null,data);
+          }catch(e){finish(e);}
+        },onerror:()=>finish(new Error('接口连接失败，请检查内网或 VPN。')),ontimeout:()=>finish(new Error('接口查询超时。')),onabort:()=>finish(new Error('已停止导出。'))});}catch(e){finish(new Error('无法发起接口请求。'));}
+      if(cancelled)handle?.abort();
+    });
   }
-  function monitorNavigation(job,child) {
-    let attempts=0;
-    const inspect=()=>{
-      const latest=readJob();
-      if(latest?.id!==job.id || !isLive(latest) || latest.stage==='query') return;
-      if(child.closed) {currentJob=latest;fail(new Error('自动导出标签页已关闭。'));return;}
-      const idle=Date.now()-(latest.updated||latest.created);
-      if(idle<18000){setTimeout(inspect,20000-idle);return;}
-      if(attempts>=2){currentJob=latest;fail(new Error('OA跳转连续失败，自动重试2次后仍未进入报表。请稍后重新点击导出。'));return;}
-      attempts++;
-      currentJob=updateJob(latest,{stage:'oa',navigationRetries:attempts,message:`OA跳转未完成，正在第${attempts}/2次重新点击入口…`});
-      $('#jobbar').textContent=currentJob.message;
-      try {child.location.href=`${APP}#ahoa-export=${encodeURIComponent(job.id)}`;}
-      catch(e){fail(new Error('无法重新打开导航标签页，请重新点击导出。'));return;}
-      setTimeout(inspect,20000);
-    };
-    setTimeout(inspect,20000);
-  }
-  async function navigateOA(job) {
-    currentJob=job; $('#jobbar').style.display='block';
-    status('正在进入：应用导航 → 每日经营关注…');
-    const restore=trackPopups(job,'dt');
-    try {
-      const daily=await waitFor(()=>exact('每日经营关注','a'),'每日经营关注入口');
-      currentJob=updateJob(currentJob,{stage:'dt'});
-      daily.click();
-    } finally { setTimeout(restore,30000); }
-  }
-  async function navigateDT(job) {
-    currentJob=job; $('#jobbar').style.display='block';
-    const report=reportOf(job);
-    if(!report) throw new Error('未知报表类型，请重新选择。');
-    status(`正在进入：${report.system} → ${report.name}…`);
-    const restore=trackPopups(job,'report');
-    try {
-      // Follow the live menu tree, using menu IDs to disambiguate repeated names.
-      const findPath=(nodes,path=[])=>{
-        for(const node of nodes||[]){const next=[...path,node];if((node.url||'').includes(`dashboardId=${report.id}`))return next;const hit=findPath(node.children,next);if(hit)return hit;}
-        return null;
-      };
-      const portal=await waitFor(()=>D.querySelector('.container')?.__vue__,'门户初始化');
-      // Left-menu buttons appear before the portal's initial menu request has
-      // finished. Wait for that request's result before deciding to switch.
-      await waitFor(()=>portal.menuData?.length && portal.headerArr?.[0]?.text,'初始菜单');
-      await portal.$nextTick();
-      // Clicking the already selected system starts another asynchronous reload
-      // which can overwrite the following submenu click.
-      if(portal.headerArr?.[0]?.text!==report.system || !findPath(portal.menuData)){
-        const system=await waitFor(()=>exact(report.system,'li,a,span'),report.system);
-        system.click();
-      }
-      const path=await waitFor(()=>portal.headerArr?.[0]?.text===report.system && findPath(portal.menuData),'报表菜单');
-      await portal.$nextTick();
-      const menuElement=node=>[...D.querySelectorAll('[data-menu-id]')].find(e=>e.getAttribute('data-menu-id')===String(node.id)&&visible(e));
-      for(let step=0;step<path.length+2;step++){
-        const leaf=menuElement(path[path.length-1]);
-        if(leaf){currentJob=updateJob(currentJob,{stage:'report'});leaf.click();return;}
-        const ancestor=[...path.slice(0,-1)].reverse().find(menuElement);
-        if(!ancestor) throw new Error('未找到可见的报表菜单入口，已停止。');
-        const next=path[path.findIndex(n=>n.id===ancestor.id)+1];
-        menuElement(ancestor).click();
-        await waitFor(()=>menuElement(next),'下级菜单',15000);
-      }
-      throw new Error('菜单层级发生变化，请重新导出。');
-    } finally { setTimeout(restore,20000); }
-  }
-  function getTable() {
-    const tables=[...D.querySelectorAll('.table-box')].map(e=>e.__vue__).filter(v=>v?.$options?.name==='TableSummaryCom');
-    if(tables.length!==1) return null;
-    const t=tables[0];
-    return typeof t.requestParams==='function' && typeof t.__BI__?.queryDataUseDict==='function' && t.dataInitialized && t.dataMatrix?.length>=3 ? t : null;
-  }
-  function queryVM(label) {return [...D.querySelectorAll('.query-com-wrapper')].find(e=>(e.innerText||'').replace(/\s+/g,'').startsWith(label))?.__vue__;}
-  async function applyFilters(job) {
-    const report=reportOf(job);
-    for(const label of [...(report.dates||[report.range]),...report.filters,report.latn]) {
-      const v=queryVM(label);
-      if(!v?.newQuery || !v.inputValue) throw new Error(`找不到${label}筛选组件，已停止。`);
-      let value;
-      if(label===report.range){
-        v.$set(v.inputValue,'value0start',job.start);v.$set(v.inputValue,'value0end',job.end);value=[job.start,job.end];
-      } else {
-        value=label===report.dates?.[0]?job.start:label===report.dates?.[1]?job.end:label===report.latn?'亳州':'checkedAllOption';
-        if(!report.dates?.includes(label)&&Array.isArray(v.inputValue.value0)) value=[value];
-        if(!report.dates?.includes(label)&&!v.inputOption?.option0?.some(o=>o.value===(label===report.latn?'亳州':'checkedAllOption'))) throw new Error(`${label}缺少预期选项，已停止。`);
-        v.$set(v.inputValue,'value0',value);
-      }
-      v.newQuery(0,value);
-      await v.$nextTick();
-    }
-  }
-  async function exportReport(job) {
-    currentJob=job; cancelled=false;
-    $('#reportType').value=job.reportKey||'promo';$('#start').value=job.start;$('#end').value=job.end;
-    show(); setBusy(true); lastFile=null; $('#again').style.display='none';
-    try {
-      const report=reportOf(job);
-      if(!report || dashboardId()!==report.id) throw new Error('当前页面与所选报表不匹配。');
-      currentJob=updateJob(currentJob,{stage:'query'});
-      status('等待报表初始化…');
-      const t=await waitFor(getTable,'报表数据和筛选组件');
-      await waitFor(()=>queryVM(report.latn)?.inputOption?.option0?.length && queryVM(report.range||report.dates[1])?.inputValue,'筛选项初始化');
-      await applyFilters(job);
-      const headerCount=Number(t.settings.fixedRowsTop);
-      if(headerCount!==report.headers || t.tableHeaderCodes?.length!==report.cols) throw new Error('报表的表头或列数已变化，需更新脚本以避免错列。');
-      const headers=t.dataMatrix.slice(0,headerCount).map(r=>r.map(c=>c?.value??''));
-      const merges=t.cellsMergeConfig.filter(m=>!m.removed && m.row<headerCount && m.row+m.rowspan<=headerCount).map(m=>({...m}));
-      const formats=Array.from({length:report.cols},(_,col)=>{
-        const c=t.dataMatrix.slice(headerCount).map(r=>r[col]).find(c=>typeof c?.innerContent==='string' && /^-?\d+\.\d+$/.test(c.innerContent));
-        return c ? Math.min(10,c.innerContent.split('.')[1].length) : 0;
+  async function getSession(){
+    check();
+    let session;
+    if(W.location.origin===REPORT_ORIGIN){
+      const cookies=Object.fromEntries(D.cookie.split(';').map(s=>{let i=s.indexOf('=');return [s.slice(0,i).trim(),s.slice(i+1)];}));
+      session={guid:W.localStorage.getItem('guid')||cookies.guid,token:W.localStorage.getItem('token')||cookies.token};
+    }else{
+      if(typeof GM_cookie==='undefined'||typeof GM_cookie.list!=='function')throw new Error('请更新脚本并允许读取报表站点登录状态。');
+      session=await new Promise((resolve,reject)=>{
+        const values={};let pending=2;
+        for(const name of ['guid','token'])GM_cookie.list({url:REPORT_ORIGIN+'/dashboard/',name},(cookies,error)=>{
+          if(error){reject(new Error('无法读取报表站点登录状态。'));return;}
+          const found=(cookies||[]).filter(c=>c.name===name&&(!c.expirationDate||c.expirationDate>Date.now()/1000)).sort((a,b)=>b.path.length-a.path.length)[0];
+          values[name]=found?.value;
+          if(!--pending)resolve(values);
+        });
       });
-      const base=JSON.parse(JSON.stringify(t.requestParams({type:'pageChange',flag:true})));
-      t.handleDealSort(base);
-      const condition=base.conditions?.find(c=>c.queryField?.code==='latn_name');
-      if(condition?.oprand!=='亳州' && JSON.stringify(condition?.oprand)!=='["亳州"]') throw new Error('查询条件中没有正确设置亳州，已停止。');
-      if(report.summary && !t.getCalcType?.some(c=>c.type==='rowTotal'&&c.show&&c.location===report.summary&&c.isQueryAll&&c.displayName==='合计')) throw new Error('报表合计配置变化，已停止。');
-      const filterStamp=JSON.stringify([...D.querySelectorAll('.query-com-wrapper')].map(e=>e.__vue__?.inputValue));
-      const parts=[]; let total=null, count=0, written=0, pages=0, requestConfig=null, preview=null, summary=null; const signatures=new Set();
-      for(let offset=0; total===null || offset<total; offset+=PAGE_SIZE) {
+    }
+    check();
+    if(!session.guid||!session.token)throw authError();
+    // Credentials remain only in this call's memory; never put them in URLs,
+    // GM storage, logs, generated workbooks, or a public release.
+    const user=await requestJSON(REPORT_ORIGIN+'/datasience/management/sysUserInfo/getUnionUserInfo',undefined,session);
+    if(Number(user.code)!==1000||!user.data)throw authError();
+    return session;
+  }
+  function prepareReport(job,cfg,list){
+    const report=reportOf(job);
+    if(cfg.id!==report.id||!Array.isArray(list))throw new Error('发布配置与所选报表不匹配。');
+    const tables=list.filter(c=>c.comContext?.type==='TableSummaryCom'&&c.comRequest);
+    if(tables.length!==1)throw new Error('报表表格结构已变化。');
+    const entry=tables[0],context=entry.comContext,base=clone(entry.comRequest);
+    if(base.dashboardId!==report.id||base.comId!==entry.comId)throw new Error('查询模板不匹配。');
+    const render=context.ext?.tableRenderHeader,header=render?.[render.renderType];
+    const headers=clone(header?.cellConfig||[]).map(r=>r.map(v=>v??''));
+    const visibleFields=base.queryFields?.filter(f=>!f.isHide);
+    if(headers.length!==report.headers||headers.some(r=>r.length!==report.cols)||visibleFields?.length!==report.cols)throw new Error('表头或列数已变化，已停止以防错列。');
+    const merges=clone(header.mergeConfig||[]).filter(m=>!m.removed&&m.row>=0&&m.col>=0&&m.row+m.rowspan<=report.headers&&m.col+m.colspan<=report.cols);
+    if(report.summary&&!base.calcType?.some(c=>c.type==='rowTotal'&&c.show&&c.location===report.summary&&c.isQueryAll&&c.displayName==='合计'))throw new Error('合计行配置已变化。');
+    const queries=list.filter(c=>c.comContext?.type==='QueryCom').flatMap(c=>(c.comContext.queryCondition||[]).map(q=>({...q,comId:c.comId})));
+    const getQuery=label=>{let matches=queries.filter(q=>labelOf(q)===label);if(matches.length!==1)throw new Error(`${label}筛选配置已变化。`);return matches[0];};
+    for(const label of [...report.filters,...(report.dates||[report.range]),report.latn])getQuery(label);
+    // Clear only the report's selectable filters; retain server-defined static constraints.
+    const ids=new Set(queries.map(q=>q.comId));
+    base.conditions=(base.conditions||[]).filter(c=>!ids.has(c.comId));
+    const condition=(q,value)=>({...clone(q.condition),comId:q.comId,logicalOp:'AND',queryField:{code:q.condition.queryField.code,dataSetId:q.dataSetId},oprand:value});
+    const latn=getQuery(report.latn);
+    if(latn.condition?.queryField?.code!=='latn_name'||!['=','IN'].includes(latn.condition.compareOperator))throw new Error('地市筛选字段已变化。');
+    base.conditions.push(condition(latn,latn.condition.compareOperator==='IN'?['亳州']:'亳州'));
+    if(report.range){
+      const range=getQuery(report.range);
+      if(range.condition.compareOperator!=='BETWEEN'||range.condition.queryField.code!=='day_id')throw new Error('日期区间字段已变化。');
+      base.conditions.unshift(condition(range,[job.start,job.end]));
+    }else{
+      for(let i=0;i<2;i++){
+        const query=getQuery(report.dates[i]);
+        const parameter=cfg.paramConfigList?.find(p=>p.id===query.paramsId&&p.paramType==='PARAM_TYPE_VARIABLE_TIME');
+        const template=base.customSqlParams?.find(p=>p.key===parameter?.displayName);
+        if(!parameter||!template)throw new Error('日期参数映射已变化。');
+        const old=String(template.value),date=i===0?job.start:job.end;
+        if(/^\d{8}$/.test(old))template.value=date.replace(/-/g,'');
+        else if(/^\d{4}-\d{2}-\d{2}$/.test(old))template.value=date;
+        else throw new Error('日期参数格式已变化。');
+      }
+    }
+    base.queryFields.forEach(f=>delete f.additionalInfo);
+    const fields=context.dataModel.tableModels.filter(f=>!f.isHide);
+    const formats=fields.map(f=>{const n=f.numFormat?.[0];return n?.type==='number'?Math.max(0,Math.min(10,Number(n.bitInput)||0)):0;});
+    base.pageInfo={limit:PAGE_SIZE,offset:0};
+    return {base,headers,merges,formats};
+  }
+  async function exportReport(job){
+    currentJob=job;cancelled=false;$('#reportType').value=job.reportKey;$('#start').value=job.start;$('#end').value=job.end;show();setBusy(true);lastFile=null;$('#again').style.display='none';
+    let session=null;
+    try{
+      const report=reportOf(job);
+      currentJob=updateJob(currentJob,{stage:'query'});status('正在检查登录状态…');
+      session=await getSession();
+      status('正在读取报表配置…');
+      const cfg=await requestJSON(API+'api/results/'+report.id,undefined,session);
+      const components=await requestJSON(API+'dashboard/component/find',{resultId:report.id},session);
+      const {base,headers,merges,formats}=prepareReport(job,cfg.data,components.data?.list),headerCount=headers.length;
+      const parts=[],signatures=new Set();let total=null,count=0,written=0,pages=0,summary=null;
+      for(let offset=0;total===null||offset<total;offset+=PAGE_SIZE){
+        check();status(`正在读取第 ${pages+1} 页（500条/页）…`);
+        const req=clone(base);req.pageInfo={limit:PAGE_SIZE,offset};
+        const data=await requestJSON(API+'query/data/?useDict=true',req,session);
         check();
-        if(filterStamp!==JSON.stringify([...D.querySelectorAll('.query-com-wrapper')].map(e=>e.__vue__?.inputValue))) throw new Error('筛选条件发生变化，已停止本次导出。');
-        status(`正在读取第 ${pages+1} 页（500条/页）${total===null?'':`，已读取 ${count} / ${total} 条`}…`);
-        const req=JSON.parse(JSON.stringify(base)); req.pageInfo={limit:PAGE_SIZE,offset};
-        // Same query client as the visible table. This never calls any export endpoint.
-        const response=requestConfig
-          ? await readNextPage(requestConfig,offset)
-          : await timed(t.__BI__.queryDataUseDict(req,t.comId,true),`第${pages+1}页查询`);
-        if(!requestConfig) requestConfig=response?.config;
-        check();
-        const data=response?.data;
-        if(!Array.isArray(data?.data)) throw new Error('查询没有返回表格数据，登录可能已过期。');
+        if(!Array.isArray(data.data))throw new Error('接口没有返回表格数据。');
         const found=Number(data.totalCount);
-        if(!Number.isSafeInteger(found)||found<0) throw new Error('返回的总条数无效。');
-        if(total===null) total=found;
-        if(found!==total) throw new Error('分页过程中总条数改变，请重新查询。');
-        if(total+headerCount+(report.summary?1:0)>1048576) throw new Error('记录数超过Excel单个工作表上限。');
+        if(!Number.isSafeInteger(found)||found<0)throw new Error('返回的总条数无效。');
+        if(total===null)total=found;
+        if(found!==total)throw new Error('分页过程中总条数改变。');
+        if(total+headerCount+(report.summary?1:0)>1048576)throw new Error('记录数超过 Excel 单表上限。');
         let rows=data.data;
+        if(pages===0)for(let c=0;c<report.cols;c++)if(!formats[c])for(const row of rows){const value=row[c];if(typeof value==='number'&&Number.isFinite(value)&&String(value).includes('.'))formats[c]=Math.max(formats[c],Math.min(10,String(value).split('.')[1].length));}
         if(report.summary){
-          const index=report.summary==='top'?0:rows.length-1, candidate=rows[index];
-          if(!Array.isArray(candidate)||candidate.length!==report.cols||candidate[0]!=='合计'||candidate.slice(1,report.dimensions).some(v=>v!==null)) throw new Error('返回的合计行结构异常，已停止。');
-          if(summary && JSON.stringify(summary)!==JSON.stringify(candidate)) throw new Error('分页过程中合计发生变化，请重新查询。');
-          summary=summary||candidate; rows=rows.filter((_,i)=>i!==index);
-          if(pages===0 && report.summary==='top'){parts.push(rowsXML([summary],headerCount,0,formats));written++;}
+          const index=report.summary==='top'?0:rows.length-1,candidate=rows[index];
+          if(!Array.isArray(candidate)||candidate.length!==report.cols||candidate[0]!=='合计'||candidate.slice(1,report.dimensions).some(v=>v!==null))throw new Error('合计行结构异常。');
+          if(summary&&JSON.stringify(summary)!==JSON.stringify(candidate))throw new Error('分页过程中合计发生变化。');
+          summary=summary||candidate;rows=rows.filter((_,i)=>i!==index);
+          if(pages===0&&report.summary==='top'){parts.push(rowsXML([summary],headerCount,0,formats));written++;}
         }
-        if(preview===null) preview={...data,data:report.summary==='top'?[summary,...rows.slice(0,20)]:report.summary==='bottom'?[...rows.slice(0,20),summary]:rows.slice(0,20)};
         const expected=Math.min(PAGE_SIZE,total-offset);
-        if(rows.length!==expected) throw new Error(`第${pages+1}页应有${expected}条，实际${rows.length}条。未生成不完整文件。`);
-        if(rows.some(r=>!Array.isArray(r)||r.length!==report.cols||r[0]!=='亳州')) throw new Error('返回记录的列数或本地网不一致，已停止。');
-        const signature=JSON.stringify(rows);
-        if(rows.length && signatures.has(hashString(signature))) throw new Error('服务器重复返回同一页，已停止以防重复数据。');
-        // Keep only a compact hash, never all page serializations.
-        if(rows.length) signatures.add(hashString(signature));
-        parts.push(rowsXML(rows,headerCount+written,0,formats));
-        count+=rows.length; written+=rows.length; pages++;
-        await new Promise(r=>setTimeout(r,0));
+        if(rows.length!==expected)throw new Error('分页行数不完整，未生成文件。');
+        if(rows.some(r=>!Array.isArray(r)||r.length!==report.cols||r[0]!=='亳州'))throw new Error('返回数据的地市或列数不匹配。');
+        if(rows.length){const signature=hashString(JSON.stringify(rows));if(signatures.has(signature))throw new Error('接口重复返回同一页。');signatures.add(signature);}
+        parts.push(rowsXML(rows,headerCount+written,0,formats));count+=rows.length;written+=rows.length;pages++;
+        await new Promise(resolve=>setTimeout(resolve,0));
       }
-      if(count!==total) throw new Error(`行数校验失败：${count}/${total}。`);
+      if(count!==total)throw new Error('总行数校验失败。');
       if(report.summary==='bottom'){parts.push(rowsXML([summary],headerCount+written,0,formats));written++;}
-      // Refresh the visible preview once (20 rows), without another query or a
-      // 500-row DOM render. The export itself still contains every record.
-      if(typeof t.getData==='function') {
-        t.$set(t.tablePageInfo,'pageSize',20);t.$set(t.tablePageInfo,'currentPage',1);
-        // The portal appends codes in updateNormalHeader instead of replacing
-        // them. Keep the verified list so another export on this page still works.
-        const codes=t.tableHeaderCodes.slice();
-        try {await t.getData({type:'pageChange',resData:preview});}
-        finally {t.tableHeaderCodes=codes;}
-      }
-      status(`已读取 ${count} 条，正在生成 XLSX…`);
-      check();
-      const blob=await buildXlsx(headers,parts,merges,written,formats,`亳州${report.name}`);
-      check();
+      status('正在生成 XLSX…');check();
+      const blob=await buildXlsx(headers,parts,merges,written,formats,`亳州${report.name}`);check();
       lastFile={name:`亳州_${report.name}_${job.start}_${job.end}_${count}条.xlsx`,blob};
       download(lastFile);
-      currentJob=updateJob(currentJob,{stage:'done',count,pages,message:'导出成功'});
-      status(currentJob.message); $('#again').style.display='inline-flex';setBusy(false);
-    } catch(e){fail(e);}
+      currentJob=updateJob(currentJob,{stage:'done',count,pages,message:'导出成功'});status('导出成功');$('#again').style.display='inline-flex';setBusy(false);
+    }catch(e){fail(e);}finally{session=null;activeRequest=null;}
   }
-  async function readNextPage(config,offset) {
-    if(!config?.url || !config?.data) throw new Error('未取得分页查询参数，已停止。');
-    const url=new URL(config.url,config.baseURL.replace(/\/$/,'')+'/');
-    if(url.origin!==W.location.origin || !url.pathname.endsWith('/query/data/')) throw new Error('分页查询地址不匹配，已停止。');
-    const body=typeof config.data==='string'?JSON.parse(config.data):JSON.parse(JSON.stringify(config.data));
-    body.pageInfo={limit:PAGE_SIZE,offset};
-    const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),120000);
-    try {
-      // Reuse this page's in-memory query headers. Never persist session credentials.
-      const r=await W.fetch(url.href,{method:'POST',credentials:'same-origin',headers:config.headers,body:JSON.stringify(body),signal:controller.signal});
-      if(!r.ok) throw new Error(`分页查询HTTP ${r.status}，已停止。`);
-      return {data:await r.json()};
-    } finally {clearTimeout(timer);}
-  }
-  function hashString(s) {let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return `${s.length}:${h>>>0}`;}
-  function validDate(s) {if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||s.slice(0,4)==='0000')return false;const d=new Date(`${s}T12:00:00`);return !Number.isNaN(d.getTime())&&isoDate(d)===s;}
-  function start() {
-    closeCalendar();
-    const start=$('#start').value.trim(), end=$('#end').value.trim(), reportKey=$('#reportType').value;
-    if(!REPORTS[reportKey]) return status('请选择报表类型。',true);
-    if(!validDate(start)||!validDate(end)||start>end) return status('请选择有效日期，开始日期不能晚于结束日期。',true);
-    if(isLive(readJob())) {$('#cancelTask').style.display='inline-flex';return status('已有任务正在导出，请稍候。',true);}
-    const sameReport=dashboardId()===REPORTS[reportKey].id;
-    const job=saveJob({id:`${Date.now()}-${Math.random().toString(36).slice(2,9)}`,reportKey,start,end,created:Date.now(),stage:sameReport?'report':'oa',message:`准备进入${REPORTS[reportKey].name}…`});
-    GM_setValue('ahoa.export.dates',{start,end});
-    GM_setValue('ahoa.export.report',reportKey);
-    if(sameReport) {exportReport(job);return;}
-    const url=`${APP}#ahoa-export=${encodeURIComponent(job.id)}`;
-    const child=W.open(url,'_blank');
-    if(!child) W.location.assign(url);
-    else {$('#shade').style.display='none';$('#jobbar').style.display='block';$('#jobbar').textContent='已打开报表自动导出标签页。';monitorNavigation(job,child);}
+  function hashString(s){let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return `${s.length}:${h>>>0}`;}
+  function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||s.slice(0,4)==='0000')return false;const d=new Date(`${s}T12:00:00`);return !Number.isNaN(d.getTime())&&isoDate(d)===s;}
+  function start(){
+    closeCalendar();const start=$('#start').value.trim(),end=$('#end').value.trim(),reportKey=$('#reportType').value;
+    if(!REPORTS[reportKey])return status('请选择报表类型。',true);
+    if(!validDate(start)||!validDate(end)||start>end)return status('请选择有效日期，开始日期不能晚于结束日期。',true);
+    if(isLive(readJob())){$('#cancelTask').style.display='inline-flex';return status('已有任务正在导出，请稍候。',true);}
+    const job=saveJob({id:`${Date.now()}-${Math.random().toString(36).slice(2,9)}`,reportKey,start,end,created:Date.now(),stage:'query',message:'准备读取报表…'});
+    GM_setValue('ahoa.export.dates',{start,end});GM_setValue('ahoa.export.report',reportKey);exportReport(job);
   }
   $('#startExport').onclick=start;
   $('#again').onclick=()=>{if(lastFile)download(lastFile);};
-  $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){if(currentJob?.id===j.id)cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});status('已停止');if(busy)$('#startExport').textContent='正在停止…';}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
+  $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
   $('#close').onclick=hide;
   GM_registerMenuCommand('亳州经营报表：选择类型和日期导出',show);
   GM_addValueChangeListener(KEY,(_key,_old,j)=>{
-    if(!currentJob || j?.id!==currentJob.id || busy) return;
-    currentJob=j;
-    if(['query','done'].includes(j.stage)) for(const tab of fallbackTabs.slice(0,-1)) {try{tab.close();}catch(_){}}
-    paintStatus(j.stage==='done'?'导出成功':j.stage==='error'?'导出失败':j.stage==='cancelled'?'已停止':j.message||'正在处理…',j.stage==='error');
-    $('#cancelTask').style.display=isLive(j)?'inline-flex':'none';
-    if(autoNavTab && ['query','done'].includes(j.stage)) W.close();
+    if(!currentJob||j?.id!==currentJob.id)return;
+    if(j.stage==='cancelled'){cancelled=true;activeRequest?.abort();}
+    if(!busy){currentJob=j;paintStatus(j.stage==='done'?'导出成功':j.stage==='error'?'导出失败':j.stage==='cancelled'?'已停止':j.message||'正在处理…',j.stage==='error');}
   });
-  async function boot() {
-    const tab=await tabState();
-    const marker=new URLSearchParams(W.location.hash.slice(1)).get('ahoa-export');
-    if(marker){tab.ahoaExport=marker;GM_saveTab(tab);}
-    const job=readJob();
-    if(!isLive(job)) return;
-    if(tab.ahoaExport!==job.id && (
-      (W.location.hostname.startsWith('nlkf-eda.') && job.stage==='dt') ||
-      (W.location.hostname.startsWith('tsfx-eda.') && job.stage==='report' && dashboardId()===reportOf(job)?.id)
-    )) {tab.ahoaExport=job.id;GM_saveTab(tab);}
-    if(tab.ahoaExport!==job.id) return;
-    currentJob=job;
-    if(W.location.hostname.startsWith('portal.') && job.stage==='oa') {autoNavTab=true;await navigateOA(job);}
-    else if(W.location.hostname.startsWith('nlkf-eda.') && job.stage==='dt') {autoNavTab=true;await navigateDT(job);}
-    else if(W.location.hostname.startsWith('tsfx-eda.') && ['report','dt'].includes(job.stage) && dashboardId()===reportOf(job)?.id) await exportReport(job);
-  }
+
+  W.addEventListener('pagehide',()=>{if(busy&&currentJob&&readJob()?.id===currentJob.id){cancelled=true;activeRequest?.abort();updateJob(currentJob,{stage:'cancelled',message:'已停止'});}});
 
   // Minimal OOXML + ZIP writer: no CDN, no clipboard, no third-party libraries.
   const esc=s=>String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -558,5 +457,4 @@
     write(end,[[0,4,0x06054b50],[8,2,files.length],[10,2,files.length],[12,4,size],[16,4,offset]]);
     return new Blob([...locals,...central,end],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   }
-  boot().catch(fail);
 })();
