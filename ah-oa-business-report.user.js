@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         安徽OA · 亳州经营报表 XLSX
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.0-beta.1
+// @version      1.4.0-beta.2
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -117,6 +117,7 @@
   }
   function chooseDate(date){
     if(!calendarTarget)return;
+    if($('#'+calendarTarget).value!==date)resetResult();
     $('#'+calendarTarget).value=date;closeCalendar(true);
   }
   function shiftMonth(delta){calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+delta,1);calendarFocus=isoDate(calendarMonth);renderCalendar();}
@@ -219,6 +220,20 @@
     $('#cancelTask').style.display=value||isLive(readJob())?'inline-flex':'none';
     $('#cancelTask').disabled=false;
     if(value){closeCalendar();$('#close').focus({preventScroll:true});}
+  }
+  const queryKey=()=>JSON.stringify([$('#reportType').value,$('#start').value.trim(),$('#end').value.trim()]);
+  function resetResult(){
+    if(busy)return;
+    lastFile=null;
+    $('#again').style.display='none';
+    $('#startExport').textContent='开始导出';
+    paintStatus('');
+    if(!isLive(readJob()))currentJob=null;
+  }
+  $('#reportType').onchange=resetResult;
+  for(const id of ['start','end']){
+    $('#'+id).oninput=resetResult;
+    $('#'+id).onchange=resetResult;
   }
   function check() {
     if (cancelled || (currentJob && readJob()?.id!==currentJob.id) || readJob()?.stage==='cancelled') throw new Error('已停止导出，未生成不完整文件。');
@@ -380,7 +395,7 @@
       if(report.summary==='bottom'){parts.push(rowsXML([summary],headerCount+written,0,formats));written++;}
       status('正在生成 XLSX…');check();
       const blob=await buildXlsx(headers,parts,merges,written,formats,`亳州${report.name}`);check();
-      lastFile={name:`亳州_${report.name}_${job.start}_${job.end}_${count}条.xlsx`,blob};
+      lastFile={name:`亳州_${report.name}_${job.start}_${job.end}_${count}条.xlsx`,blob,queryKey:JSON.stringify([job.reportKey,job.start,job.end])};
       download(lastFile);
       currentJob=updateJob(currentJob,{stage:'done',count,pages,message:'导出成功'});status('导出成功');$('#again').style.display='inline-flex';setBusy(false);
     }catch(e){fail(e);}finally{session=null;activeRequest=null;}
@@ -396,7 +411,7 @@
     GM_setValue('ahoa.export.dates',{start,end});GM_setValue('ahoa.export.report',reportKey);exportReport(job);
   }
   $('#startExport').onclick=start;
-  $('#again').onclick=()=>{if(lastFile)download(lastFile);};
+  $('#again').onclick=()=>{if(lastFile?.queryKey!==queryKey()){resetResult();return;}if(lastFile)download(lastFile);};
   $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
   $('#close').onclick=hide;
   GM_registerMenuCommand('亳州经营报表：选择类型和日期导出',show);
