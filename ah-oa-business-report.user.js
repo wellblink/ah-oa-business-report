@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.0
+// @version      1.4.1
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -81,6 +81,16 @@
   const updateJob = (j, patch) => saveJob({...j, ...patch, updated:Date.now()});
   const isoDate=d=>`${String(d.getFullYear()).padStart(4,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   let calendarTarget=null, calendarMonth=null, calendarFocus=null;
+  function dateAllowed(target,date){
+    if(!validDate(date))return false;
+    const other=$('#'+(target==='start'?'end':'start')).value.trim();
+    return !validDate(other)||(target==='start'?date<=other:date>=other);
+  }
+  function calendarDate(date){
+    if(dateAllowed(calendarTarget,date))return date;
+    const other=$('#'+(calendarTarget==='start'?'end':'start')).value.trim();
+    return validDate(other)?other:isoDate(new Date());
+  }
   function closeCalendar(focus=false){
     const target=calendarTarget;calendarTarget=null;$('#calendar').hidden=true;
     $('#pickStart').setAttribute('aria-expanded','false');$('#pickEnd').setAttribute('aria-expanded','false');
@@ -101,8 +111,10 @@
     $('#calDays').innerHTML=Array.from({length:42},(_,i)=>{
       const day=new Date(year,month,begin+i),date=isoDate(day);
       const classes=[day.getMonth()!==month?'outside':'',date===today?'today':'',date===selected?'selected':''].filter(Boolean).join(' ');
-      return `<button data-date="${date}" class="${classes}" aria-label="${date}" aria-pressed="${date===selected}" tabindex="${date===calendarFocus?0:-1}">${day.getDate()}</button>`;
+      const allowed=dateAllowed(calendarTarget,date);
+      return `<button data-date="${date}" class="${classes}" aria-label="${date}" aria-pressed="${date===selected}" ${allowed?'':'disabled'} tabindex="${allowed&&date===calendarFocus?0:-1}">${day.getDate()}</button>`;
     }).join('');
+    $('#calToday').disabled=!dateAllowed(calendarTarget,today);
     placeCalendar();
     if(focus) $('#calDays').querySelector(`[data-date="${calendarFocus}"]`)?.focus({preventScroll:true});
   }
@@ -110,15 +122,18 @@
     if(busy)return;
     if(calendarTarget===target){closeCalendar();return;}
     closeCalendar();calendarTarget=target;
-    const date=validDate($('#'+target).value)?new Date($('#'+target).value+'T12:00:00'):new Date();
+    const selected=$('#'+target).value.trim();
+    const date=new Date(calendarDate(validDate(selected)?selected:isoDate(new Date()))+'T12:00:00');
     calendarMonth=new Date(date.getFullYear(),date.getMonth(),1);calendarFocus=isoDate(date);
     $('#calendar').hidden=false;$('#'+(target==='start'?'pickStart':'pickEnd')).setAttribute('aria-expanded','true');
     renderCalendar(true);
   }
   function chooseDate(date){
-    if(!calendarTarget)return;
-    if($('#'+calendarTarget).value!==date)resetResult();
-    $('#'+calendarTarget).value=date;closeCalendar(true);
+    if(!calendarTarget||!dateAllowed(calendarTarget,date))return;
+    const input=$('#'+calendarTarget),changed=input.value!==date;
+    input.value=date;
+    if(changed)resetResult();
+    closeCalendar(true);
   }
   function shiftMonth(delta){calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+delta,1);calendarFocus=isoDate(calendarMonth);renderCalendar();}
   $('#pickStart').onclick=()=>openCalendar('start');$('#pickEnd').onclick=()=>openCalendar('end');
@@ -133,7 +148,8 @@
     if(delta!==undefined)date.setDate(date.getDate()+delta);
     else if(key==='Home'||key==='End')date.setDate(date.getDate()-(date.getDay()+6)%7+(key==='End'?6:0));
     else {date.setDate(1);date.setMonth(date.getMonth()+(key==='PageUp'?-1:1));}
-    calendarMonth=new Date(date.getFullYear(),date.getMonth(),1);calendarFocus=isoDate(date);renderCalendar(true);
+    const allowedDate=new Date(calendarDate(isoDate(date))+'T12:00:00');
+    calendarMonth=new Date(allowedDate.getFullYear(),allowedDate.getMonth(),1);calendarFocus=isoDate(allowedDate);renderCalendar(true);
   };
   root.onpointerdown=e=>{
     if(calendarTarget && !e.composedPath().includes($('#calendar')) && !e.composedPath().includes($('#'+calendarTarget).parentElement))closeCalendar();
@@ -209,10 +225,11 @@
     const today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
     if (!$('#start').value) $('#start').value=last.start || `${now.getFullYear()}-01-01`;
     if (!$('#end').value) $('#end').value=last.end || today;
+    validateDates(false);
     if(!busy)$('#reportType').focus({preventScroll:true});
   }
   function setBusy(value) {
-    busy=value; $('#startExport').disabled=value;
+    busy=value;
     $('#start').disabled=value; $('#end').disabled=value;
     $('#reportType').disabled=value;
     $('#pickStart').disabled=value;$('#pickEnd').disabled=value;
@@ -221,6 +238,7 @@
     $('#again').style.display=!value&&lastFile?'flex':'none';
     $('#cancelTask').style.display=value||isLive(readJob())?'inline-flex':'none';
     $('#cancelTask').disabled=false;
+    validateDates(false);
     if(value){closeCalendar();$('#close').focus({preventScroll:true});}
   }
   const queryKey=()=>JSON.stringify([$('#reportType').value,$('#start').value.trim(),$('#end').value.trim()]);
@@ -232,6 +250,7 @@
     $('#startExport').style.display='flex';
     paintStatus('');
     if(!isLive(readJob()))currentJob=null;
+    validateDates();
   }
   $('#reportType').onchange=resetResult;
   for(const id of ['start','end']){
@@ -405,10 +424,19 @@
   }
   function hashString(s){let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return `${s.length}:${h>>>0}`;}
   function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||s.slice(0,4)==='0000')return false;const d=new Date(`${s}T12:00:00`);return !Number.isNaN(d.getTime())&&isoDate(d)===s;}
+  function validateDates(showMessage=true){
+    const start=$('#start').value.trim(),end=$('#end').value.trim();
+    const startValid=validDate(start),endValid=validDate(end),reversed=startValid&&endValid&&start>end;
+    $('#start').setAttribute('aria-invalid',String(!startValid||reversed));
+    $('#end').setAttribute('aria-invalid',String(!endValid||reversed));
+    $('#startExport').disabled=busy||!startValid||!endValid||reversed;
+    if(showMessage&&(!startValid||!endValid||reversed))paintStatus(reversed?'开始日期不能晚于结束日期':'请输入有效日期（YYYY-MM-DD）',true);
+    return startValid&&endValid&&!reversed;
+  }
   function start(){
     closeCalendar();const start=$('#start').value.trim(),end=$('#end').value.trim(),reportKey=$('#reportType').value;
     if(!REPORTS[reportKey])return status('请选择报表类型。',true);
-    if(!validDate(start)||!validDate(end)||start>end)return status('请选择有效日期，开始日期不能晚于结束日期。',true);
+    if(!validateDates())return;
     if(isLive(readJob())){$('#cancelTask').style.display='inline-flex';return status('已有任务正在导出，请稍候。',true);}
     const job=saveJob({id:`${Date.now()}-${Math.random().toString(36).slice(2,9)}`,reportKey,start,end,created:Date.now(),stage:'query',message:'准备读取报表…'});
     GM_setValue('ahoa.export.dates',{start,end});GM_setValue('ahoa.export.report',reportKey);exportReport(job);
