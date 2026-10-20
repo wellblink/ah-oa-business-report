@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.1
+// @version      1.4.2
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -277,8 +277,8 @@
   const clone=value=>JSON.parse(JSON.stringify(value));
   const labelOf=q=>String(q.set?.alias||q.name||'').replace(/[\s:：]/g,'');
   function authError(){return new Error('登录已失效或当前工号没有报表权限，请重新登录后再试。');}
-  function requestJSON(url,body,session){
-    check();
+  function requestJSON(url,body,session,background=false){
+    if(!background)check();
     const target=new URL(url);
     if(target.origin!==REPORT_ORIGIN || !/^\/datasience\/(?:vbap3\/(?:api\/results\/vbap[a-f0-9]+|dashboard\/component\/find|query\/data\/)|management\/sysUserInfo\/getUnionUserInfo)$/.test(target.pathname)) throw new Error('接口地址不在允许的查询范围内。');
     return new Promise((resolve,reject)=>{
@@ -287,11 +287,11 @@
       timer=setTimeout(()=>{finish(new Error('接口查询超时。'));handle?.abort();},120000);
       let raw;
       handle={abort:()=>{finish(new Error('已停止导出。'));raw?.abort();}};
-      activeRequest=handle;
+      if(!background)activeRequest=handle;
       try{raw=GM_xmlhttpRequest({redirect:'error',method:body===undefined?'GET':'POST',url:target.href,timeout:120000,responseType:'text',headers:{'Content-Type':'application/json',guid:session.guid,token:session.token},...(body===undefined?{}:{data:JSON.stringify(body)}),
         onload:r=>{
           try{
-            check();
+            if(!background)check();
             if([401,403].includes(r.status))throw authError();
             if(r.status<200||r.status>=300)throw new Error(`查询接口 HTTP ${r.status}。`);
             if(r.finalUrl&&new URL(r.finalUrl).origin!==REPORT_ORIGIN)throw authError();
@@ -300,15 +300,41 @@
             finish(null,data);
           }catch(e){finish(e);}
         },onerror:()=>finish(new Error('接口连接失败，请检查内网或 VPN。')),ontimeout:()=>finish(new Error('接口查询超时。')),onabort:()=>finish(new Error('已停止导出。'))});}catch(e){finish(new Error('无法发起接口请求。'));}
-      if(cancelled)handle?.abort();
+      if(!background&&cancelled)handle?.abort();
     });
+  }
+  function localReportSession(){return {guid:W.localStorage.getItem('guid'),token:W.localStorage.getItem('token')};}
+  function reportCookies(){return Object.fromEntries(D.cookie.split(';').filter(s=>s.includes('=')).map(s=>{const i=s.indexOf('=');return [s.slice(0,i).trim(),s.slice(i+1)];}));}
+  function syncSessionCookies(session){
+    if(W.location.origin!==REPORT_ORIGIN)return;
+    // Match the report site's own SSO cookie names, with host-only session cookies.
+    // No expiry extension, GM credential storage, cross-site destination, or login URL.
+    for(const name of ['guid','token']){
+      if(/[;\s\r\n]/.test(session[name]))throw new Error('报表登录状态格式异常。');
+    }
+    const cookies=reportCookies();
+    for(const name of ['guid','token'])if(cookies[name]!==session[name])D.cookie=`${name}=${session[name]}; Path=/; SameSite=Lax`;
+  }
+  let sessionBridgePending=false;
+  async function primeReportSession(){
+    if(W.location.origin!==REPORT_ORIGIN||sessionBridgePending)return;
+    const session=localReportSession(),cookies=reportCookies();
+    if(!session.guid||!session.token||(cookies.guid===session.guid&&cookies.token===session.token))return;
+    sessionBridgePending=true;
+    try{
+      const user=await requestJSON(REPORT_ORIGIN+'/datasience/management/sysUserInfo/getUnionUserInfo',undefined,session,true);
+      if(Number(user.code)!==1000||!user.data)throw authError();
+      const current=localReportSession();
+      if(current.guid===session.guid&&current.token===session.token)syncSessionCookies(session);
+    }catch(e){W.console?.warn('[报表导出]',`登录状态同步失败：${e.message}`);}
+    finally{sessionBridgePending=false;}
   }
   async function getSession(){
     check();
     let session;
     if(W.location.origin===REPORT_ORIGIN){
-      const cookies=Object.fromEntries(D.cookie.split(';').map(s=>{let i=s.indexOf('=');return [s.slice(0,i).trim(),s.slice(i+1)];}));
-      session={guid:W.localStorage.getItem('guid')||cookies.guid,token:W.localStorage.getItem('token')||cookies.token};
+      const cookies=reportCookies(),local=localReportSession();
+      session={guid:local.guid||cookies.guid,token:local.token||cookies.token};
     }else{
       if(typeof GM_cookie==='undefined'||typeof GM_cookie.list!=='function')throw new Error('请更新脚本并允许读取报表站点登录状态。');
       session=await new Promise((resolve,reject)=>{
@@ -322,11 +348,12 @@
       });
     }
     check();
-    if(!session.guid||!session.token)throw authError();
-    // Credentials remain only in this call's memory; never put them in URLs,
-    // GM storage, logs, generated workbooks, or a public release.
+    if(!session.guid||!session.token)throw new Error('未读取到报表登录状态，请先打开任一报表完成登录，再返回 OA 导出。');
+    // Never put credentials in URLs, GM storage, logs, workbooks, or a release.
+    // A verified report login may mirror the site's own host-only session cookies.
     const user=await requestJSON(REPORT_ORIGIN+'/datasience/management/sysUserInfo/getUnionUserInfo',undefined,session);
     if(Number(user.code)!==1000||!user.data)throw authError();
+    syncSessionCookies(session);
     return session;
   }
   function prepareReport(job,cfg,list){
@@ -502,5 +529,12 @@
     const size=central.reduce((s,b)=>s+b.length,0), end=new Uint8Array(22);
     write(end,[[0,4,0x06054b50],[8,2,files.length],[10,2,files.length],[12,4,size],[16,4,offset]]);
     return new Blob([...locals,...central,end],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  }
+  if(W.location.origin===REPORT_ORIGIN){
+    primeReportSession();
+    // Bounded retries cover the site's asynchronous SSO completion; no polling.
+    setTimeout(primeReportSession,1500);setTimeout(primeReportSession,5000);
+    W.addEventListener('focus',primeReportSession);
+    W.addEventListener('storage',e=>{if(e.key==='guid'||e.key==='token')primeReportSession();});
   }
 })();
