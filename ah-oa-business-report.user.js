@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         安徽OA · 亳州经营报表 XLSX
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.0-beta.2
+// @version      1.4.0-beta.3
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -43,6 +43,7 @@
   const icon=(name,size=20)=>`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${{
     download:'<path d="M12 3v11m-4-4 4 4 4-4"/><path d="M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/>',
     chevron:'<path d="m8 10 4 4 4-4"/>',
+    close:'<path d="m6 6 12 12M18 6 6 18"/>',
     calendar:'<rect x="3" y="5" width="18" height="16" rx="4"/><path d="M7 3v4m10-4v4M3 11h18m-11 4h.01M12 15h.01M16 15h.01"/>',
     left:'<path d="m14 6-6 6 6 6"/>',right:'<path d="m10 6 6 6-6 6"/>'
   }[name]}</svg>`;
@@ -51,25 +52,24 @@
     *,*::before,*::after{box-sizing:border-box}button,input,select{font:inherit}button{border:0;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}button:disabled{cursor:default;opacity:.46}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #007aff45;outline-offset:3px}svg{display:block;flex:none}button{transition:background .16s,box-shadow .16s,opacity .16s}button:not(:disabled):active{filter:brightness(.95)}[hidden]{display:none!important}
     #entry{position:fixed;right:24px;bottom:24px;z-index:2147483646;display:flex;align-items:center;gap:10px;padding:13px 19px;border:1px solid #ffffffcc;border-radius:999px;background:#fffffff2;color:#1d1d1f;font-weight:600;font-size:14px;letter-spacing:.01em;box-shadow:0 2px 6px #14213d0a,0 8px 28px #14213d21;cursor:grab;touch-action:none;white-space:nowrap}#entry svg{color:#007aff}#entry:hover{background:white;box-shadow:0 3px 10px #14213d0f,0 10px 30px #14213d29}#entry.dragging{cursor:grabbing;box-shadow:0 10px 30px #14213d33}
     #shade{display:none;position:fixed;inset:0;z-index:2147483647;background:#1320394d;align-items:center;justify-content:center;padding:20px;overflow:auto}
-    #box{width:408px;max-width:100%;max-height:calc(100dvh - 40px);overflow:auto;padding:28px;border:1px solid #ffffffcc;border-radius:26px;background:#fff;box-shadow:0 24px 90px #0e1e3a33,0 2px 8px #0e1e3a0a}
-    .heading{display:flex;align-items:center;gap:13px;margin-bottom:26px}.mark{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:#eaf3ff;color:#007aff;flex:none}h2{font-size:23px;font-weight:650;letter-spacing:-.7px;line-height:1.3;margin:0}p{font-size:13px;color:#86868b;margin:5px 0 0}
+    #box{position:relative;width:408px;max-width:100%;max-height:calc(100dvh - 40px);overflow:auto;padding:28px;border:1px solid #ffffffcc;border-radius:26px;background:#fff;box-shadow:0 24px 90px #0e1e3a33,0 2px 8px #0e1e3a0a}
+    .heading{padding-right:24px;display:flex;align-items:center;gap:13px;margin-bottom:26px}.mark{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:#eaf3ff;color:#007aff;flex:none}h2{font-size:23px;font-weight:650;letter-spacing:-.7px;line-height:1.3;margin:0}p{font-size:13px;color:#86868b;margin:5px 0 0}
     .field+.field{margin-top:18px}label{display:block;font-size:12px;font-weight:600;letter-spacing:.02em;color:#6e6e73;margin:0 0 7px 2px}.control{height:50px;position:relative;border:1px solid #e8e8ed;border-radius:12px;background:#f5f5f7;transition:border-color .16s,box-shadow .16s}.control:focus-within{border-color:#007aff88;box-shadow:0 0 0 3px #007aff0c}
     input,select{display:block;width:100%;height:100%;margin:0;padding:0 48px 0 14px;border:0;border-radius:11px;color:#1d1d1f;background:transparent;font-size:15px;line-height:normal;appearance:none;-webkit-appearance:none}input{font-variant-numeric:tabular-nums;letter-spacing:.2px}input:focus,select:focus{outline:0}input::placeholder{color:#aaaab0}.field-icon{position:absolute;right:0;top:0;width:46px;height:48px;display:flex;align-items:center;justify-content:center;color:#86868b;background:transparent;border-radius:11px;pointer-events:none}.field-icon.picker{pointer-events:auto}.picker:hover{color:#007aff;background:#007aff08}select{cursor:pointer}select:disabled,input:disabled{opacity:.5}.control:has(:disabled) .picker{opacity:.4}
-    .actions{display:grid;grid-template-columns:1fr 1.6fr;gap:12px;margin-top:26px}.actions button,#secondaryActions button{display:flex;align-items:center;justify-content:center;min-height:46px;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;line-height:1.45}.primary{background:#007aff;color:#fff;box-shadow:0 2px 5px #007aff1c}.primary:hover:not(:disabled){background:#006eed}.secondary{color:#424247;background:#f0f0f3}.secondary:hover:not(:disabled){background:#e7e7ec}.danger{color:#d73535;background:#fff0f0}.danger:hover:not(:disabled){background:#ffe4e4}
+    .actions{display:flex;flex-direction:column;gap:12px;margin-top:26px}.actions button{display:flex;align-items:center;justify-content:center;min-height:46px;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:600;line-height:1.45}.primary{background:#007aff;color:#fff;box-shadow:0 2px 5px #007aff1c}.primary:hover:not(:disabled){background:#006eed}.secondary{color:#424247;background:#f0f0f3}.secondary:hover:not(:disabled){background:#e7e7ec}.danger{color:#d73535;background:#fff0f0}.danger:hover:not(:disabled){background:#ffe4e4}
     #status{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;color:#6e6e73;overflow-wrap:anywhere;text-align:center;line-height:1.55;padding:11px 12px;margin-top:18px;border-radius:12px;background:#f5f5f7}#status:empty{display:none}#status.success{color:#21834a;background:#edf8f1}#status.error{color:#c53232;background:#fff0f0}
-    #secondaryActions{display:flex;flex-wrap:wrap;gap:12px}#secondaryActions:has(button[style*="inline"]){margin-top:12px}#secondaryActions button{display:none;flex:1;min-width:130px}
+    #close{position:absolute;right:18px;top:18px;width:30px;height:30px;padding:0;display:grid;place-items:center;border-radius:50%;color:#86868b;background:#f0f0f3}#close:hover{color:#424247;background:#e7e7ec}
     #jobbar{display:none;position:fixed;right:24px;bottom:84px;z-index:2147483646;max-width:min(320px,calc(100vw - 32px));border:1px solid #e8e8ed;border-radius:16px;background:#fffffff5;color:#53535b;box-shadow:0 5px 24px #14213d1a;padding:13px 17px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;pointer-events:none}
     #calendar{position:fixed;z-index:2;width:300px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;padding:17px;border:1px solid #e5e5eac9;border-radius:21px;background:#fff;box-shadow:0 14px 48px #14213d29,0 2px 7px #14213d0d}.cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px}.cal-head strong{font-size:15px;font-weight:650;letter-spacing:-.2px}.cal-nav{display:flex;gap:4px}.cal-nav button{width:30px;height:30px;display:grid;place-items:center;background:#f5f5f7;color:#68686e;border-radius:9px}.cal-nav button:hover{background:#eaf3ff;color:#007aff}.weekdays,#calDays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}.weekdays{margin-bottom:6px}.weekdays span{text-align:center;color:#a0a0a7;font-size:11px;line-height:26px}#calDays button{height:32px;min-width:0;border-radius:9px;background:transparent;color:#303035;font-size:13px;font-variant-numeric:tabular-nums}#calDays button:hover{background:#f0f5ff;color:#007aff}#calDays button.outside{color:#c1c1c6}#calDays button.today{box-shadow:inset 0 0 0 1px #007aff55;color:#007aff}#calDays button.selected{background:#007aff;color:#fff;box-shadow:0 2px 5px #007aff26}.cal-footer{margin-top:13px;border-top:1px solid #f0f0f3;padding-top:11px;display:flex;justify-content:space-between;gap:12px}.cal-footer button{background:transparent;color:#007aff;padding:5px 8px;border-radius:7px;font-size:12px;font-weight:500}.cal-footer button:hover{background:#f0f5ff}
     @media(max-width:440px){#shade{padding:14px}#box{padding:24px 20px;border-radius:23px;max-height:calc(100dvh - 28px)}h2{font-size:21px}.heading{gap:11px}.actions{gap:10px}#entry{right:16px;bottom:18px}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important}}
   </style><button id="entry" title="拖动调整位置，点击导出" aria-label="经营报表导出">${icon('download',18)}<span>经营报表导出</span></button><div id="jobbar" role="status" aria-live="polite"></div><div id="shade"><section id="box" role="dialog" aria-modal="true" aria-labelledby="title">
-    <div class="heading"><div class="mark">${icon('download',23)}</div><div><h2 id="title">经营报表导出</h2><p>选择报表与日期</p></div></div>
+    <button id="close" aria-label="关闭" title="关闭">${icon('close',16)}</button><div class="heading"><div class="mark">${icon('download',23)}</div><div><h2 id="title">经营报表导出</h2><p>选择报表与日期</p></div></div>
     <div class="field"><label for="reportType">报表类型</label><div class="control"><select id="reportType">${Object.entries(REPORTS).map(([key,r])=>`<option value="${key}">${r.name}</option>`).join('')}</select><span class="field-icon">${icon('chevron',18)}</span></div></div>
     <div class="field"><label for="start">开始日期</label><div class="control"><input id="start" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10" required><button class="field-icon picker" id="pickStart" aria-label="选择开始日期" aria-haspopup="dialog" aria-expanded="false">${icon('calendar',18)}</button></div></div>
     <div class="field"><label for="end">结束日期</label><div class="control"><input id="end" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10" required><button class="field-icon picker" id="pickEnd" aria-label="选择结束日期" aria-haspopup="dialog" aria-expanded="false">${icon('calendar',18)}</button></div></div>
     <div id="status" role="status" aria-live="polite"></div>
-    <div class="actions"><button id="close" class="secondary">关闭</button><button id="startExport" class="primary">开始导出</button></div>
-    <div id="secondaryActions"><button id="cancelTask" class="danger">停止导出</button><button id="again" class="secondary">重新保存</button></div>
+    <div class="actions"><button id="startExport" class="primary">开始导出</button><button id="again" class="primary" style="display:none">重新保存</button><button id="cancelTask" class="danger" style="display:none">停止导出</button></div>
   <div id="calendar" role="dialog" aria-label="选择日期" hidden><div class="cal-head"><strong id="calMonth"></strong><div class="cal-nav"><button id="calPrev" aria-label="上个月">${icon('left',15)}</button><button id="calNext" aria-label="下个月">${icon('right',15)}</button></div></div><div class="weekdays" aria-hidden="true">${['一','二','三','四','五','六','日'].map(s=>`<span>${s}</span>`).join('')}</div><div id="calDays" role="group" aria-label="日期"></div><div class="cal-footer"><button id="calToday">今天</button><button id="calDone">完成</button></div></div></section></div>`;
   const $ = s => root.querySelector(s);
   $('#reportType').value=GM_getValue('ahoa.export.report','promo');
@@ -216,7 +216,9 @@
     $('#start').disabled=value; $('#end').disabled=value;
     $('#reportType').disabled=value;
     $('#pickStart').disabled=value;$('#pickEnd').disabled=value;
-    $('#startExport').textContent=value?'正在导出…':lastFile?'再次导出':'开始导出';
+    $('#startExport').textContent=value?'正在导出…':'开始导出';
+    $('#startExport').style.display=value||!lastFile?'flex':'none';
+    $('#again').style.display=!value&&lastFile?'flex':'none';
     $('#cancelTask').style.display=value||isLive(readJob())?'inline-flex':'none';
     $('#cancelTask').disabled=false;
     if(value){closeCalendar();$('#close').focus({preventScroll:true});}
@@ -227,6 +229,7 @@
     lastFile=null;
     $('#again').style.display='none';
     $('#startExport').textContent='开始导出';
+    $('#startExport').style.display='flex';
     paintStatus('');
     if(!isLive(readJob()))currentJob=null;
   }
@@ -397,7 +400,7 @@
       const blob=await buildXlsx(headers,parts,merges,written,formats,`亳州${report.name}`);check();
       lastFile={name:`亳州_${report.name}_${job.start}_${job.end}_${count}条.xlsx`,blob,queryKey:JSON.stringify([job.reportKey,job.start,job.end])};
       download(lastFile);
-      currentJob=updateJob(currentJob,{stage:'done',count,pages,message:'导出成功'});status('导出成功');$('#again').style.display='inline-flex';setBusy(false);
+      currentJob=updateJob(currentJob,{stage:'done',count,pages,message:'导出成功'});status('导出成功');setBusy(false);
     }catch(e){fail(e);}finally{session=null;activeRequest=null;}
   }
   function hashString(s){let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return `${s.length}:${h>>>0}`;}
