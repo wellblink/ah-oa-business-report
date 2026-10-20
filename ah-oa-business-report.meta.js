@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         安徽OA · 亳州经营报表 XLSX
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.0-beta.3
+// @version      1.4.0-beta.4
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
