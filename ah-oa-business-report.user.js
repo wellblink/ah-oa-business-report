@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.2
+// @version      1.4.3
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -12,6 +12,8 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
+// @grant        GM_removeValueChangeListener
+// @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @grant        GM_cookie
@@ -35,6 +37,56 @@
   const PAGE_SIZE = 500;
   const TTL = 30 * 60 * 1000;
   const D = W.document;
+  const REPORT_ORIGIN='http://tsfx-eda.anhuitelecom.com:12110';
+  const SYNC_KEY='ahoa.export.session-sync.v1';
+  const SYNC_TIMEOUT=35000;
+  const syncNonce=new URLSearchParams(W.location.hash.slice(1)).get('ahoa-sync');
+  // The temporary tab has no export UI and only validates this export's session.
+  if(W.location.origin===REPORT_ORIGIN&&syncNonce){
+    runSessionWorker(syncNonce);
+    return;
+  }
+  async function runSessionWorker(nonce){
+    const pending=GM_getValue(SYNC_KEY,null),job=GM_getValue(KEY,null);
+    if(!pending||pending.nonce!==nonce||pending.state!=='pending'||pending.jobId!==job?.id||Date.now()>pending.expires||['cancelled','done','error'].includes(job.stage))return;
+    let session=null,handle,timer,listener;
+    const publish=state=>{
+      const current=GM_getValue(SYNC_KEY,null),latest=GM_getValue(KEY,null);
+      if(current?.nonce===nonce&&current.state==='pending'&&latest?.id===pending.jobId&&latest.stage!=='cancelled'&&Date.now()<=pending.expires)
+        GM_setValue(SYNC_KEY,{...current,state});
+    };
+    try{
+      session=localReportSession();
+      if(!session.guid||!session.token){publish('missing');return;}
+      await new Promise((resolve,reject)=>{
+        let settled=false;
+        const finish=error=>{if(settled)return;settled=true;clearTimeout(timer);error?reject(error):resolve();};
+        handle={abort(){finish(new Error('stopped'));raw?.abort();}};
+        let raw;
+        timer=setTimeout(()=>{finish(new Error('network'));raw?.abort();},20000);
+        listener=GM_addValueChangeListener(KEY,(_k,_old,value)=>{if(value?.id!==pending.jobId||value.stage==='cancelled')handle.abort();});
+        raw=GM_xmlhttpRequest({method:'GET',url:REPORT_ORIGIN+'/datasience/management/sysUserInfo/getUnionUserInfo',redirect:'error',timeout:20000,responseType:'text',headers:{guid:session.guid,token:session.token},
+          onload:response=>{
+            try{
+              if([401,403].includes(response.status))throw new Error('auth');
+              if(response.status!==200||(response.finalUrl&&new URL(response.finalUrl).origin!==REPORT_ORIGIN))throw new Error('network');
+              let user;try{user=JSON.parse(response.responseText);}catch(_){throw new Error('network');}
+              if(Number(user.code)!==1000||!user.data)throw new Error('auth');
+              finish();
+            }catch(error){finish(error);}
+          },onerror:()=>finish(new Error('network')),ontimeout:()=>finish(new Error('network')),onabort:()=>finish(new Error('stopped'))});
+        W.addEventListener('pagehide',()=>handle.abort(),{once:true});
+      });
+      const current=localReportSession(),latest=GM_getValue(KEY,null);
+      if(current.guid!==session.guid||current.token!==session.token)throw new Error('changed');
+      if(latest?.id!==pending.jobId||latest.stage==='cancelled')return;
+      syncSessionCookies(session);
+      const cookies=reportCookies();
+      if(cookies.guid!==session.guid||cookies.token!==session.token)throw new Error('cookies');
+      publish('ready');
+    }catch(error){publish(['auth','network','changed','cookies'].includes(error.message)?error.message:'failed');}
+    finally{session=null;clearTimeout(timer);if(listener!=null)GM_removeValueChangeListener(listener);}
+  }
   if (D.getElementById('ahoa-export-root')) return;
   const host = D.createElement('div');
   host.id = 'ahoa-export-root';
@@ -271,9 +323,36 @@
     W.console?.warn('[报表导出]',detail);
     setBusy(false); show(); status(message,!cancelled);
   }
-  const REPORT_ORIGIN='http://tsfx-eda.anhuitelecom.com:12110';
   const API=REPORT_ORIGIN+'/datasience/vbap3/';
-  let activeRequest=null;
+  let activeRequest=null,activeSync=null;
+  function synchronizeReportSession(job){
+    check();
+    return new Promise((resolve,reject)=>{
+      let tab,listener,timer,settled=false;
+      const nonce=`${job.id}-${Math.random().toString(36).slice(2)}`;
+      const finish=error=>{
+        if(settled)return;settled=true;clearTimeout(timer);
+        if(listener!=null)GM_removeValueChangeListener(listener);
+        try{tab?.close();}catch(_){}
+        if(GM_getValue(SYNC_KEY,null)?.nonce===nonce)GM_setValue(SYNC_KEY,null);
+        activeSync=null;error?reject(error):resolve();
+      };
+      activeSync={abort:()=>finish(new Error('已停止导出。'))};
+      GM_setValue(SYNC_KEY,{nonce,jobId:job.id,state:'pending',expires:Date.now()+SYNC_TIMEOUT});
+      listener=GM_addValueChangeListener(SYNC_KEY,(_k,_old,value)=>{
+        if(value?.nonce!==nonce||value.state==='pending')return;
+        try{check();}catch(error){finish(error);return;}
+        const errors={missing:'报表尚未登录，请先完成报表登录。',auth:authError().message,network:'后台登录同步连接失败，请检查内网或 VPN。',changed:'同步期间登录账号改变，请重新导出。',cookies:'浏览器未允许同步报表登录状态。'};
+        finish(value.state==='ready'?null:new Error(errors[value.state]||'后台登录同步失败。'));
+      });
+      timer=setTimeout(()=>finish(new Error('后台登录同步超时，请检查报表能否正常打开。')),SYNC_TIMEOUT);
+      try{
+        tab=GM_openInTab(`${REPORT_ORIGIN}/dashboard/v4/bi-publish?dashboardId=${reportOf(job).id}#ahoa-sync=${encodeURIComponent(nonce)}`,{active:false,insert:true,setParent:true});
+        if(!tab||typeof tab.close!=='function')throw new Error('tab');
+        tab.onclose=()=>{if(!settled)finish(new Error('后台同步标签已关闭，请重新导出。'));};
+      }catch(_){finish(new Error('无法打开后台同步标签，请检查篡改猴权限。'));}
+    });
+  }
   const clone=value=>JSON.parse(JSON.stringify(value));
   const labelOf=q=>String(q.set?.alias||q.name||'').replace(/[\s:：]/g,'');
   function authError(){return new Error('登录已失效或当前工号没有报表权限，请重新登录后再试。');}
@@ -406,7 +485,9 @@
     let session=null;
     try{
       const report=reportOf(job);
-      currentJob=updateJob(currentJob,{stage:'query'});status('正在检查登录状态…');
+      currentJob=updateJob(currentJob,{stage:'query'});status('正在同步登录状态…');
+      await synchronizeReportSession(job);
+      check();status('正在检查登录状态…');
       session=await getSession();
       status('正在读取报表配置…');
       const cfg=await requestJSON(API+'api/results/'+report.id,undefined,session);
@@ -447,7 +528,7 @@
       lastFile={name:`亳州_${report.name}_${job.start}_${job.end}_${count}条.xlsx`,blob,queryKey:JSON.stringify([job.reportKey,job.start,job.end])};
       download(lastFile);
       currentJob=updateJob(currentJob,{stage:'done',count,pages,message:'导出成功'});status('导出成功');setBusy(false);
-    }catch(e){fail(e);}finally{session=null;activeRequest=null;}
+    }catch(e){fail(e);}finally{session=null;activeRequest=null;activeSync?.abort();}
   }
   function hashString(s){let h=2166136261;for(let i=0;i<s.length;i++)h=Math.imul(h^s.charCodeAt(i),16777619);return `${s.length}:${h>>>0}`;}
   function validDate(s){if(!/^\d{4}-\d{2}-\d{2}$/.test(s)||s.slice(0,4)==='0000')return false;const d=new Date(`${s}T12:00:00`);return !Number.isNaN(d.getTime())&&isoDate(d)===s;}
@@ -470,16 +551,17 @@
   }
   $('#startExport').onclick=start;
   $('#again').onclick=()=>{if(lastFile?.queryKey!==queryKey()){resetResult();return;}if(lastFile)download(lastFile);};
-  $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
+  $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();activeSync?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
   $('#close').onclick=hide;
   GM_registerMenuCommand('报表导出',show);
   GM_addValueChangeListener(KEY,(_key,_old,j)=>{
-    if(!currentJob||j?.id!==currentJob.id)return;
-    if(j.stage==='cancelled'){cancelled=true;activeRequest?.abort();}
+    if(!currentJob)return;
+    if(j?.id!==currentJob.id){if(busy){cancelled=true;activeRequest?.abort();activeSync?.abort();}return;}
+    if(j.stage==='cancelled'){cancelled=true;activeRequest?.abort();activeSync?.abort();}
     if(!busy){currentJob=j;paintStatus(j.stage==='done'?'导出成功':j.stage==='error'?'导出失败':j.stage==='cancelled'?'已停止':j.message||'正在处理…',j.stage==='error');}
   });
 
-  W.addEventListener('pagehide',()=>{if(busy&&currentJob&&readJob()?.id===currentJob.id){cancelled=true;activeRequest?.abort();updateJob(currentJob,{stage:'cancelled',message:'已停止'});}});
+  W.addEventListener('pagehide',()=>{if(busy&&currentJob&&readJob()?.id===currentJob.id){cancelled=true;activeRequest?.abort();activeSync?.abort();updateJob(currentJob,{stage:'cancelled',message:'已停止'});}});
 
   // Minimal OOXML + ZIP writer: no CDN, no clipboard, no third-party libraries.
   const esc=s=>String(s).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/g,'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
