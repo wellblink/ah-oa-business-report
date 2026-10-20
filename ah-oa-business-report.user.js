@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         安徽OA · 亳州经营报表 XLSX
+// @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.0-beta.4
+// @version      1.4.0
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -63,8 +63,8 @@
     #calendar{position:fixed;z-index:2;width:300px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;padding:17px;border:1px solid #e5e5eac9;border-radius:21px;background:#fff;box-shadow:0 14px 48px #14213d29,0 2px 7px #14213d0d}.cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px}.cal-head strong{font-size:15px;font-weight:650;letter-spacing:-.2px}.cal-nav{display:flex;gap:4px}.cal-nav button{width:30px;height:30px;display:grid;place-items:center;background:#f5f5f7;color:#68686e;border-radius:9px}.cal-nav button:hover{background:#eaf3ff;color:#007aff}.weekdays,#calDays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}.weekdays{margin-bottom:6px}.weekdays span{text-align:center;color:#a0a0a7;font-size:11px;line-height:26px}#calDays button{height:32px;min-width:0;border-radius:9px;background:transparent;color:#303035;font-size:13px;font-variant-numeric:tabular-nums}#calDays button:hover{background:#f0f5ff;color:#007aff}#calDays button.outside{color:#c1c1c6}#calDays button.today{box-shadow:inset 0 0 0 1px #007aff55;color:#007aff}#calDays button.selected{background:#007aff;color:#fff;box-shadow:0 2px 5px #007aff26}.cal-footer{margin-top:13px;border-top:1px solid #f0f0f3;padding-top:11px;display:flex;justify-content:space-between;gap:12px}.cal-footer button{background:transparent;color:#007aff;padding:5px 8px;border-radius:7px;font-size:12px;font-weight:500}.cal-footer button:hover{background:#f0f5ff}
     @media(max-width:440px){#shade{padding:14px}#box{padding:24px 20px;border-radius:23px;max-height:calc(100dvh - 28px)}h2{font-size:21px}.heading{gap:11px}#entry{right:16px;bottom:18px}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important}}
-  </style><button id="entry" title="拖动调整位置，点击导出" aria-label="经营报表导出">${icon('download',18)}<span>经营报表导出</span></button><div id="jobbar" role="status" aria-live="polite"></div><div id="shade"><section id="box" role="dialog" aria-modal="true" aria-labelledby="title">
-    <button id="close" aria-label="关闭" title="关闭">${icon('close',16)}</button><div class="heading"><div class="mark">${icon('download',23)}</div><div><h2 id="title">经营报表导出</h2><p>选择报表与日期</p></div></div>
+  </style><button id="entry" title="拖动调整位置，点击导出" aria-label="报表导出">${icon('download',18)}<span>报表导出</span></button><div id="jobbar" role="status" aria-live="polite"></div><div id="shade"><section id="box" role="dialog" aria-modal="true" aria-labelledby="title">
+    <button id="close" aria-label="关闭" title="关闭">${icon('close',16)}</button><div class="heading"><div class="mark">${icon('download',23)}</div><div><h2 id="title">报表导出</h2><p>选择报表与日期</p></div></div>
     <div class="field"><label for="reportType">报表类型</label><div class="control"><select id="reportType">${Object.entries(REPORTS).map(([key,r])=>`<option value="${key}">${r.name}</option>`).join('')}</select><span class="field-icon">${icon('chevron',18)}</span></div></div>
     <div class="field"><label for="start">开始日期</label><div class="control"><input id="start" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10" required><button class="field-icon picker" id="pickStart" aria-label="选择开始日期" aria-haspopup="dialog" aria-expanded="false">${icon('calendar',18)}</button></div></div>
     <div class="field"><label for="end">结束日期</label><div class="control"><input id="end" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10" required><button class="field-icon picker" id="pickEnd" aria-label="选择结束日期" aria-haspopup="dialog" aria-expanded="false">${icon('calendar',18)}</button></div></div>
@@ -249,7 +249,7 @@
   function fail(e) {
     const detail=e?.message || String(e),message=cancelled?'已停止':'导出失败';
     if(currentJob && readJob()?.id===currentJob.id) currentJob=updateJob(currentJob,{stage:cancelled?'cancelled':'error',message,errorDetail:detail});
-    W.console?.warn('[经营报表导出]',detail);
+    W.console?.warn('[报表导出]',detail);
     setBusy(false); show(); status(message,!cancelled);
   }
   const REPORT_ORIGIN='http://tsfx-eda.anhuitelecom.com:12110';
@@ -417,7 +417,7 @@
   $('#again').onclick=()=>{if(lastFile?.queryKey!==queryKey()){resetResult();return;}if(lastFile)download(lastFile);};
   $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
   $('#close').onclick=hide;
-  GM_registerMenuCommand('亳州经营报表：选择类型和日期导出',show);
+  GM_registerMenuCommand('报表导出',show);
   GM_addValueChangeListener(KEY,(_key,_old,j)=>{
     if(!currentJob||j?.id!==currentJob.id)return;
     if(j.stage==='cancelled'){cancelled=true;activeRequest?.abort();}
