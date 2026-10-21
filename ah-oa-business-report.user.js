@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.3
+// @version      1.4.4-beta.1
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -13,6 +13,8 @@
 // @grant        GM_setValue
 // @grant        GM_addValueChangeListener
 // @grant        GM_removeValueChangeListener
+// @grant        GM_getTab
+// @grant        GM_saveTab
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
@@ -23,7 +25,7 @@
 // @noframes
 // ==/UserScript==
 
-(function () {
+(async function () {
   'use strict';
   const W = typeof unsafeWindow === 'undefined' ? window : unsafeWindow;
   const KEY = 'ahoa.export.job.api.v1';
@@ -39,7 +41,8 @@
   const D = W.document;
   const REPORT_ORIGIN='http://tsfx-eda.anhuitelecom.com:12110';
   const SYNC_KEY='ahoa.export.session-sync.v1';
-  const SYNC_TIMEOUT=35000;
+  const SYNC_TIMEOUT=65000;
+  const APP='http://portal.mss.anhuitelecom.com:12104/idealprotalview/application?subscript=2';
   const syncNonce=new URLSearchParams(W.location.hash.slice(1)).get('ahoa-sync');
   // The temporary tab has no export UI and only validates this export's session.
   if(W.location.origin===REPORT_ORIGIN&&syncNonce){
@@ -56,6 +59,14 @@
         GM_setValue(SYNC_KEY,{...current,state});
     };
     try{
+      // The report app exchanges the one-time SSO code asynchronously.
+      const end=Math.min(Date.now()+16000,pending.expires);
+      while(new URLSearchParams(W.location.search).has('code')&&Date.now()<end){
+        const current=GM_getValue(SYNC_KEY,null),latest=GM_getValue(KEY,null);
+        if(current?.nonce!==nonce||latest?.id!==pending.jobId||latest.stage==='cancelled')return;
+        await new Promise(resolve=>setTimeout(resolve,400));
+      }
+      if(new URLSearchParams(W.location.search).has('code')){publish('navigation');return;}
       session=localReportSession();
       if(!session.guid||!session.token){publish('missing');return;}
       await new Promise((resolve,reject)=>{
@@ -86,6 +97,99 @@
       publish('ready');
     }catch(error){publish(['auth','network','changed','cookies'].includes(error.message)?error.message:'failed');}
     finally{session=null;clearTimeout(timer);if(listener!=null)GM_removeValueChangeListener(listener);}
+  }
+  // Only worker tabs carry this per-tab marker; ordinary user tabs are untouched.
+  const navMarker=new URLSearchParams(W.location.hash.slice(1)).get('ahoa-nav');
+  const tabInfo=navMarker||GM_getValue(SYNC_KEY,null)?await new Promise(resolve=>GM_getTab(tab=>resolve(tab||{}))):{};
+  if(navMarker){tabInfo.ahoaLoginNonce=navMarker;GM_saveTab(tabInfo);}
+  const navNonce=navMarker||tabInfo.ahoaLoginNonce;
+  if(navNonce){
+    if(W.location.origin===REPORT_ORIGIN)await runSessionWorker(navNonce);
+    else await runNavigationWorker(navNonce);
+    return;
+  }
+  async function runNavigationWorker(nonce){
+    const pending=GM_getValue(SYNC_KEY,null),job=GM_getValue(KEY,null);
+    if(pending?.nonce!==nonce||pending.state!=='pending'||pending.jobId!==job?.id||Date.now()>pending.expires)return;
+    const childTabs=[],timers=new Map();let stopped=false,forwarding=false;
+    const live=()=>{
+      const current=GM_getValue(SYNC_KEY,null),latest=GM_getValue(KEY,null);
+      return !stopped&&current?.nonce===nonce&&current.state==='pending'&&latest?.id===pending.jobId&&!['cancelled','done','error'].includes(latest.stage)&&Date.now()<pending.expires;
+    };
+    const cleanup=()=>{
+      if(stopped)return;stopped=true;
+      if(W.open===interceptOpen)W.open=()=>null;
+      for(const tab of childTabs)try{tab.close();}catch(_){}
+      for(const [timer,reject] of timers){clearTimeout(timer);reject(new Error('stopped'));}timers.clear();
+      GM_removeValueChangeListener(syncListener);GM_removeValueChangeListener(jobListener);
+    };
+    const publish=state=>{if(live())GM_setValue(SYNC_KEY,{...GM_getValue(SYNC_KEY,null),state});};
+    const pause=ms=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>{timers.delete(timer);resolve();},ms);timers.set(timer,reject);});
+    const wait=async(fn,ms=20000)=>{
+      const end=Math.min(Date.now()+ms,pending.expires);
+      while(Date.now()<end&&live()){const value=fn();if(value)return value;await pause(400);}
+      throw new Error(live()?'navigation':'stopped');
+    };
+    const visible=element=>element&&element.getClientRects().length&&W.getComputedStyle(element).visibility!=='hidden';
+    const normalize=value=>String(value||'').replace(/[\ue000-\uf8ff\s]/g,'').replace(/（/g,'(').replace(/）/g,')');
+    const exact=(label,selectors)=>[...D.querySelectorAll(selectors)].filter(element=>visible(element)&&normalize(element.textContent)===normalize(label)).sort((a,b)=>a.children.length-b.children.length)[0];
+    function interceptOpen(rawUrl){
+      if(!live())return null;
+      // Preserve the portal's own SSO URL in memory; never store or log it.
+      const target=new URL(rawUrl||'about:blank',W.location.href);
+      const allowed=['http://oa-mss.anhuitelecom.com:11367','https://nlkf-eda.anhuitelecom.com:11050','http://nlkf-eda.anhuitelecom.com:11051',REPORT_ORIGIN];
+      if(!allowed.includes(target.origin)){publish('navigation');return null;}
+      if(W.location.hostname==='portal.mss.anhuitelecom.com'){
+        forwarding=true;
+        W.location.assign(target.href);
+        return {closed:false,focus(){}};
+      }
+      // DT uses two delayed opens: keep DT alive and replace only our own child.
+      for(const tab of childTabs.splice(0))try{tab.close();}catch(_){}
+      if(target.origin===REPORT_ORIGIN||target.pathname==='/aopPortal/dt')target.hash='ahoa-sync='+encodeURIComponent(nonce);
+      const child=GM_openInTab(target.href,{active:false,insert:true,setParent:true});
+      if(!child||typeof child.close!=='function')throw new Error('navigation');
+      childTabs.push(child);
+      return {closed:false,focus(){}};
+    }
+    const syncListener=GM_addValueChangeListener(SYNC_KEY,()=>{if(!live())cleanup();});
+    const jobListener=GM_addValueChangeListener(KEY,()=>{if(!live())cleanup();});
+    W.addEventListener('pagehide',cleanup,{once:true});
+    W.open=interceptOpen;
+    try{
+      if(W.location.hostname==='portal.mss.anhuitelecom.com'){
+        const daily=await wait(()=>exact('每日经营关注','a'));
+        if(!live())return;
+        daily.click();
+      }else if(W.location.hostname==='nlkf-eda.anhuitelecom.com'){
+        const report=reportOf(job);
+        const findPath=(nodes,path=[])=>{
+          for(const node of nodes||[]){const next=[...path,node];if((node.url||'').includes('dashboardId='+report.id))return next;const found=findPath(node.children,next);if(found)return found;}
+          return null;
+        };
+        const portal=await wait(()=>D.querySelector('.container')?.__vue__);
+        await wait(()=>portal.menuData?.length&&portal.headerArr?.[0]?.text);
+        await portal.$nextTick();
+        if(portal.headerArr?.[0]?.text!==report.system||!findPath(portal.menuData)){
+          const system=await wait(()=>exact(report.system,'li,a,span'));
+          system.click();
+        }
+        const path=await wait(()=>portal.headerArr?.[0]?.text===report.system&&findPath(portal.menuData));
+        await portal.$nextTick();
+        const menuElement=node=>[...D.querySelectorAll('[data-menu-id]')].find(element=>element.getAttribute('data-menu-id')===String(node.id)&&visible(element));
+        for(let step=0;step<path.length+2;step++){
+          if(!live())return;
+          const leaf=menuElement(path[path.length-1]);
+          if(leaf){leaf.click();return;}
+          const ancestor=[...path.slice(0,-1)].reverse().find(menuElement);
+          if(!ancestor)throw new Error('navigation');
+          const next=path[path.findIndex(node=>node.id===ancestor.id)+1];
+          menuElement(ancestor).click();
+          await wait(()=>menuElement(next),10000);
+        }
+        throw new Error('navigation');
+      }else throw new Error('navigation');
+    }catch(error){if(error.message!=='stopped'&&!forwarding)publish('navigation');}
   }
   if (D.getElementById('ahoa-export-root')) return;
   const host = D.createElement('div');
@@ -325,7 +429,13 @@
   }
   const API=REPORT_ORIGIN+'/datasience/vbap3/';
   let activeRequest=null,activeSync=null;
-  function synchronizeReportSession(job){
+  async function synchronizeReportSession(job){
+    for(let attempt=0;attempt<2;attempt++){
+      try{return await synchronizeReportSessionAttempt(job);}
+      catch(error){check();if(attempt||!error.retryNavigation)throw error;status('正在重试登录跳转…');}
+    }
+  }
+  function synchronizeReportSessionAttempt(job){
     check();
     return new Promise((resolve,reject)=>{
       let tab,listener,timer,settled=false;
@@ -342,12 +452,14 @@
       listener=GM_addValueChangeListener(SYNC_KEY,(_k,_old,value)=>{
         if(value?.nonce!==nonce||value.state==='pending')return;
         try{check();}catch(error){finish(error);return;}
-        const errors={missing:'报表尚未登录，请先完成报表登录。',auth:authError().message,network:'后台登录同步连接失败，请检查内网或 VPN。',changed:'同步期间登录账号改变，请重新导出。',cookies:'浏览器未允许同步报表登录状态。'};
-        finish(value.state==='ready'?null:new Error(errors[value.state]||'后台登录同步失败。'));
+        const errors={missing:'报表尚未登录，请先完成报表登录。',auth:authError().message,network:'后台登录同步连接失败，请检查内网或 VPN。',changed:'同步期间登录账号改变，请重新导出。',cookies:'浏览器未允许同步报表登录状态。',navigation:'OA 单点登录跳转未完成，请确认正常应用导航能打开所选报表。'};
+        const error=value.state==='ready'?null:new Error(errors[value.state]||'后台登录同步失败。');
+        if(error)error.retryNavigation=value.state==='navigation';
+        finish(error);
       });
-      timer=setTimeout(()=>finish(new Error('后台登录同步超时，请检查报表能否正常打开。')),SYNC_TIMEOUT);
+      timer=setTimeout(()=>{const error=new Error('后台登录同步超时，请通过 OA 正常入口重新登录后再试。');error.retryNavigation=true;finish(error);},SYNC_TIMEOUT);
       try{
-        tab=GM_openInTab(`${REPORT_ORIGIN}/dashboard/v4/bi-publish?dashboardId=${reportOf(job).id}#ahoa-sync=${encodeURIComponent(nonce)}`,{active:false,insert:true,setParent:true});
+        tab=GM_openInTab(`${APP}#ahoa-nav=${encodeURIComponent(nonce)}`,{active:false,insert:true,setParent:true});
         if(!tab||typeof tab.close!=='function')throw new Error('tab');
         tab.onclose=()=>{if(!settled)finish(new Error('后台同步标签已关闭，请重新导出。'));};
       }catch(_){finish(new Error('无法打开后台同步标签，请检查篡改猴权限。'));}
@@ -554,6 +666,13 @@
   $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();activeSync?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
   $('#close').onclick=hide;
   GM_registerMenuCommand('报表导出',show);
+  GM_registerMenuCommand('检查登录跳转（不导出）',async()=>{
+    if(isLive(readJob()))return status('已有任务正在处理…');
+    const job=saveJob({id:`login-${Date.now()}-${Math.random().toString(36).slice(2,9)}`,reportKey:$('#reportType').value,created:Date.now(),stage:'query'});
+    cancelled=false;show();setBusy(true);
+    try{status('正在检查登录跳转…');await synchronizeReportSession(job);currentJob=updateJob(currentJob,{stage:'done',message:'登录成功'});setBusy(false);status('登录成功');}
+    catch(error){fail(error);}
+  });
   GM_addValueChangeListener(KEY,(_key,_old,j)=>{
     if(!currentJob)return;
     if(j?.id!==currentJob.id){if(busy){cancelled=true;activeRequest?.abort();activeSync?.abort();}return;}
