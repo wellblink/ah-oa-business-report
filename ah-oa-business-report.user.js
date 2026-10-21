@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.5
+// @version      1.4.6
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -204,29 +204,24 @@
           // A completed resource without a visible HTTP status is inconclusive.
           return entry.responseStatus===200;
         });
-        let emptyListSeen=false;
         await wait(()=>{
           if(portal.leftMenu?.length){
             if(!portal.leftMenu.some(item=>item.app_name===report.system))throw new Error('menu-access');
             return true;
           }
-          if(completed('/mySysIndex/querySysDataList')){
-            if(emptyListSeen)throw new Error('menu-access');
-            emptyListSeen=true;
-          }
+          // HTTP completion alone does not prove async decryption finished.
+          // For a truly empty application list, the native error above is final.
+          completed('/mySysIndex/querySysDataList');
           return false;
         });
-        let menuSince=-Infinity,emptyMenuSeen=false;
+        let menuSince=-Infinity;
         const menuReady=()=>{
           if(portal.headerArr?.[0]?.text===report.system){
             const path=findPath(portal.menuData);
             if(path)return path;
             throw new Error('menu-access');
           }
-          if(completed('/mySysIndex/queryMenuPrivilege',menuSince)){
-            if(emptyMenuSeen)throw new Error('menu-access');
-            emptyMenuSeen=true;
-          }
+          completed('/mySysIndex/queryMenuPrivilege',menuSince);
           return false;
         };
         await wait(()=>portal.headerArr?.[0]?.text||menuReady());
@@ -234,7 +229,7 @@
         if(portal.headerArr?.[0]?.text!==report.system||!findPath(portal.menuData)){
           if(portal.headerArr?.[0]?.text===report.system)throw new Error('menu-access');
           const system=await wait(()=>exact(report.system,'li,a,span'));
-          menuSince=W.performance?.now?.()??Infinity;emptyMenuSeen=false;
+          menuSince=W.performance?.now?.()??Infinity;
           system.click();
         }
         const path=await wait(menuReady);
