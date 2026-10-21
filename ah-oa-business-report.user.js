@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.4-beta.2
+// @version      1.4.4
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -682,13 +682,6 @@
   $('#cancelTask').onclick=()=>{const j=readJob();if(isLive(j)){cancelled=true;currentJob=updateJob(j,{stage:'cancelled',message:'已停止'});activeRequest?.abort();activeSync?.abort();status('已停止');}$('#cancelTask').disabled=true;$('#cancelTask').style.display='none';};
   $('#close').onclick=hide;
   GM_registerMenuCommand('报表导出',show);
-  GM_registerMenuCommand('检查登录跳转（不导出）',async()=>{
-    if(isLive(readJob()))return status('已有任务正在处理…');
-    const job=saveJob({id:`login-${Date.now()}-${Math.random().toString(36).slice(2,9)}`,reportKey:$('#reportType').value,created:Date.now(),stage:'query'});
-    cancelled=false;show();setBusy(true);
-    try{status('正在检查登录跳转…');await synchronizeReportSession(job);currentJob=updateJob(currentJob,{stage:'done',message:'登录成功'});setBusy(false);status('登录成功');}
-    catch(error){fail(error);}
-  });
   GM_addValueChangeListener(KEY,(_key,_old,j)=>{
     if(!currentJob)return;
     if(j?.id!==currentJob.id){if(busy){cancelled=true;activeRequest?.abort();activeSync?.abort();}return;}
