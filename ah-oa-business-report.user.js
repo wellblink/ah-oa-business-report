@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.4-beta.1
+// @version      1.4.4-beta.2
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -111,6 +111,22 @@
   async function runNavigationWorker(nonce){
     const pending=GM_getValue(SYNC_KEY,null),job=GM_getValue(KEY,null);
     if(pending?.nonce!==nonce||pending.state!=='pending'||pending.jobId!==job?.id||Date.now()>pending.expires)return;
+    if(W.location.hostname==='portal.mss.anhuitelecom.com'){
+      // GM_openInTab has no opener and does not inherit sessionStorage.
+      // OA's /application route skips the normal router session bootstrap.
+      // Restore only missing OA values from its own existing local storage,
+      // then reload this owned tab once so native created hooks can run again.
+      let restored=false;
+      for(const key of ['Authorization','User']){
+        const current=W.sessionStorage.getItem(key),saved=W.localStorage.getItem(key);
+        const valid=value=>value&&value!=='null'&&value!=='undefined';
+        if(!valid(current)&&valid(saved)){W.sessionStorage.setItem(key,saved);restored=true;}
+      }
+      if(restored&&!tabInfo.ahoaSessionRestored){
+        tabInfo.ahoaSessionRestored=true;GM_saveTab(tabInfo);
+        W.location.reload();return;
+      }
+    }
     const childTabs=[],timers=new Map();let stopped=false,forwarding=false;
     const live=()=>{
       const current=GM_getValue(SYNC_KEY,null),latest=GM_getValue(KEY,null);
