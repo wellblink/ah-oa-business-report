@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.4
+// @version      1.4.5
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -79,10 +79,11 @@
         raw=GM_xmlhttpRequest({method:'GET',url:REPORT_ORIGIN+'/datasience/management/sysUserInfo/getUnionUserInfo',redirect:'error',timeout:20000,responseType:'text',headers:{guid:session.guid,token:session.token},
           onload:response=>{
             try{
-              if([401,403].includes(response.status))throw new Error('auth');
+              if(response.status===403)throw new Error('forbidden');
+              if(response.status===401)throw new Error('auth');
               if(response.status!==200||(response.finalUrl&&new URL(response.finalUrl).origin!==REPORT_ORIGIN))throw new Error('network');
               let user;try{user=JSON.parse(response.responseText);}catch(_){throw new Error('network');}
-              if(Number(user.code)!==1000||!user.data)throw new Error('auth');
+              if(Number(user.code)!==1000||!user.data)throw responseError(user);
               finish();
             }catch(error){finish(error);}
           },onerror:()=>finish(new Error('network')),ontimeout:()=>finish(new Error('network')),onabort:()=>finish(new Error('stopped'))});
@@ -95,7 +96,7 @@
       const cookies=reportCookies();
       if(cookies.guid!==session.guid||cookies.token!==session.token)throw new Error('cookies');
       publish('ready');
-    }catch(error){publish(['auth','network','changed','cookies'].includes(error.message)?error.message:'failed');}
+    }catch(error){const kind=error.code||error.message;publish(['auth','forbidden','network','changed','cookies'].includes(kind)?kind:'failed');}
     finally{session=null;clearTimeout(timer);if(listener!=null)GM_removeValueChangeListener(listener);}
   }
   // Only worker tabs carry this per-tab marker; ordinary user tabs are untouched.
@@ -127,7 +128,7 @@
         W.location.reload();return;
       }
     }
-    const childTabs=[],timers=new Map();let stopped=false,forwarding=false;
+    const childTabs=[],timers=new Map();let stopped=false,forwarding=false,onPortalError;
     const live=()=>{
       const current=GM_getValue(SYNC_KEY,null),latest=GM_getValue(KEY,null);
       return !stopped&&current?.nonce===nonce&&current.state==='pending'&&latest?.id===pending.jobId&&!['cancelled','done','error'].includes(latest.stage)&&Date.now()<pending.expires;
@@ -137,6 +138,7 @@
       if(W.open===interceptOpen)W.open=()=>null;
       for(const tab of childTabs)try{tab.close();}catch(_){}
       for(const [timer,reject] of timers){clearTimeout(timer);reject(new Error('stopped'));}timers.clear();
+      if(onPortalError)W.removeEventListener('unhandledrejection',onPortalError);
       GM_removeValueChangeListener(syncListener);GM_removeValueChangeListener(jobListener);
     };
     const publish=state=>{if(live())GM_setValue(SYNC_KEY,{...GM_getValue(SYNC_KEY,null),state});};
@@ -178,19 +180,64 @@
         if(!live())return;
         daily.click();
       }else if(W.location.hostname==='nlkf-eda.anhuitelecom.com'){
+        // The native portal throws here after its successful application-list
+        // response contains no usable entries. Keep its console error visible.
+        onPortalError=event=>{
+          const portal=D.querySelector('.container')?.__vue__;
+          if(/Cannot read propert(?:y|ies).*app_id/.test(event.reason?.message||'')&&Array.isArray(portal?.leftMenu)&&!portal.leftMenu.length)publish('menu-access');
+        };
+        W.addEventListener('unhandledrejection',onPortalError);
         const report=reportOf(job);
         const findPath=(nodes,path=[])=>{
           for(const node of nodes||[]){const next=[...path,node];if((node.url||'').includes('dashboardId='+report.id))return next;const found=findPath(node.children,next);if(found)return found;}
           return null;
         };
         const portal=await wait(()=>D.querySelector('.container')?.__vue__);
-        await wait(()=>portal.menuData?.length&&portal.headerArr?.[0]?.text);
+        // Observe only completion metadata for the portal's own menu requests.
+        // Empty menus while a request is pending are not a permission failure.
+        const completed=(path,since=-Infinity)=>(W.performance?.getEntriesByType?.('resource')||[]).some(entry=>{
+          let target;try{target=new URL(entry.name,W.location.href);}catch(_){return false;}
+          if(target.origin!==W.location.origin||!target.pathname.endsWith(path)||!entry.responseEnd||entry.responseEnd<since)return false;
+          if(entry.responseStatus===401)throw new Error('auth');
+          if(entry.responseStatus===403)throw new Error('forbidden');
+          if(entry.responseStatus>=400)throw new Error('network');
+          // A completed resource without a visible HTTP status is inconclusive.
+          return entry.responseStatus===200;
+        });
+        let emptyListSeen=false;
+        await wait(()=>{
+          if(portal.leftMenu?.length){
+            if(!portal.leftMenu.some(item=>item.app_name===report.system))throw new Error('menu-access');
+            return true;
+          }
+          if(completed('/mySysIndex/querySysDataList')){
+            if(emptyListSeen)throw new Error('menu-access');
+            emptyListSeen=true;
+          }
+          return false;
+        });
+        let menuSince=-Infinity,emptyMenuSeen=false;
+        const menuReady=()=>{
+          if(portal.headerArr?.[0]?.text===report.system){
+            const path=findPath(portal.menuData);
+            if(path)return path;
+            throw new Error('menu-access');
+          }
+          if(completed('/mySysIndex/queryMenuPrivilege',menuSince)){
+            if(emptyMenuSeen)throw new Error('menu-access');
+            emptyMenuSeen=true;
+          }
+          return false;
+        };
+        await wait(()=>portal.headerArr?.[0]?.text||menuReady());
         await portal.$nextTick();
         if(portal.headerArr?.[0]?.text!==report.system||!findPath(portal.menuData)){
+          if(portal.headerArr?.[0]?.text===report.system)throw new Error('menu-access');
           const system=await wait(()=>exact(report.system,'li,a,span'));
+          menuSince=W.performance?.now?.()??Infinity;emptyMenuSeen=false;
           system.click();
         }
-        const path=await wait(()=>portal.headerArr?.[0]?.text===report.system&&findPath(portal.menuData));
+        const path=await wait(menuReady);
         await portal.$nextTick();
         const menuElement=node=>[...D.querySelectorAll('[data-menu-id]')].find(element=>element.getAttribute('data-menu-id')===String(node.id)&&visible(element));
         for(let step=0;step<path.length+2;step++){
@@ -205,7 +252,7 @@
         }
         throw new Error('navigation');
       }else throw new Error('navigation');
-    }catch(error){if(error.message!=='stopped'&&!forwarding)publish('navigation');}
+    }catch(error){if(error.message!=='stopped'&&!forwarding)publish(['menu-access','auth','forbidden','network'].includes(error.message)?error.message:'navigation');}
   }
   if (D.getElementById('ahoa-export-root')) return;
   const host = D.createElement('div');
@@ -438,7 +485,7 @@
     setTimeout(()=>URL.revokeObjectURL(url),60000);
   }
   function fail(e) {
-    const detail=e?.message || String(e),message=cancelled?'已停止':'导出失败';
+    const detail=e?.message || String(e),message=cancelled?'已停止':e?.userMessage||'导出失败';
     if(currentJob && readJob()?.id===currentJob.id) currentJob=updateJob(currentJob,{stage:cancelled?'cancelled':'error',message,errorDetail:detail});
     W.console?.warn('[报表导出]',detail);
     setBusy(false); show(); status(message,!cancelled);
@@ -469,7 +516,7 @@
         if(value?.nonce!==nonce||value.state==='pending')return;
         try{check();}catch(error){finish(error);return;}
         const errors={missing:'报表尚未登录，请先完成报表登录。',auth:authError().message,network:'后台登录同步连接失败，请检查内网或 VPN。',changed:'同步期间登录账号改变，请重新导出。',cookies:'浏览器未允许同步报表登录状态。',navigation:'OA 单点登录跳转未完成，请确认正常应用导航能打开所选报表。'};
-        const error=value.state==='ready'?null:new Error(errors[value.state]||'后台登录同步失败。');
+        const error=value.state==='ready'?null:value.state==='forbidden'?permissionError():value.state==='menu-access'?permissionError('未获取到所选报表，请确认工号权限'):value.state==='auth'?authError():new Error(errors[value.state]||'后台登录同步失败。');
         if(error)error.retryNavigation=value.state==='navigation';
         finish(error);
       });
@@ -483,7 +530,14 @@
   }
   const clone=value=>JSON.parse(JSON.stringify(value));
   const labelOf=q=>String(q.set?.alias||q.name||'').replace(/[\s:：]/g,'');
-  function authError(){return new Error('登录已失效或当前工号没有报表权限，请重新登录后再试。');}
+  function authError(){const error=new Error('登录已失效，请重新登录');error.userMessage=error.message;error.code='auth';return error;}
+  function permissionError(message='当前工号无此报表权限'){
+    const error=new Error(message);error.userMessage=message;error.code='forbidden';return error;
+  }
+  function responseError(data){
+    const detail=[data?.message,data?.msg,data?.mess].filter(value=>typeof value==='string').join(' ').slice(0,500);
+    return /无.{0,8}权限|没有.{0,8}权限|权限不足|无权访问|forbidden|access denied/i.test(detail)?permissionError():authError();
+  }
   function requestJSON(url,body,session,background=false){
     if(!background)check();
     const target=new URL(url);
@@ -499,11 +553,12 @@
         onload:r=>{
           try{
             if(!background)check();
-            if([401,403].includes(r.status))throw authError();
+            if(r.status===403)throw permissionError();
+            if(r.status===401)throw authError();
             if(r.status<200||r.status>=300)throw new Error(`查询接口 HTTP ${r.status}。`);
             if(r.finalUrl&&new URL(r.finalUrl).origin!==REPORT_ORIGIN)throw authError();
             let data;try{data=JSON.parse(r.responseText);}catch(_){throw new Error('接口未返回 JSON，请检查内网连接或登录状态。');}
-            if(data.code!=null&&Number(data.code)!==1000)throw authError();
+            if(data.code!=null&&Number(data.code)!==1000)throw responseError(data);
             finish(null,data);
           }catch(e){finish(e);}
         },onerror:()=>finish(new Error('接口连接失败，请检查内网或 VPN。')),ontimeout:()=>finish(new Error('接口查询超时。')),onabort:()=>finish(new Error('已停止导出。'))});}catch(e){finish(new Error('无法发起接口请求。'));}
@@ -686,7 +741,7 @@
     if(!currentJob)return;
     if(j?.id!==currentJob.id){if(busy){cancelled=true;activeRequest?.abort();activeSync?.abort();}return;}
     if(j.stage==='cancelled'){cancelled=true;activeRequest?.abort();activeSync?.abort();}
-    if(!busy){currentJob=j;paintStatus(j.stage==='done'?'导出成功':j.stage==='error'?'导出失败':j.stage==='cancelled'?'已停止':j.message||'正在处理…',j.stage==='error');}
+    if(!busy){currentJob=j;paintStatus(j.stage==='done'?'导出成功':j.stage==='error'?j.message||'导出失败':j.stage==='cancelled'?'已停止':j.message||'正在处理…',j.stage==='error');}
   });
 
   W.addEventListener('pagehide',()=>{if(busy&&currentJob&&readJob()?.id===currentJob.id){cancelled=true;activeRequest?.abort();activeSync?.abort();updateJob(currentJob,{stage:'cancelled',message:'已停止'});}});
