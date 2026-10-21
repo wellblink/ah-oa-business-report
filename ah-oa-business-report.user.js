@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         报表导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.6
+// @version      1.4.7
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -663,7 +663,7 @@
     let session=null;
     try{
       const report=reportOf(job);
-      currentJob=updateJob(currentJob,{stage:'query'});status('正在同步登录状态…');
+      currentJob=updateJob(currentJob,{stage:'query'});status('');
       await synchronizeReportSession(job);
       check();status('正在检查登录状态…');
       session=await getSession();
