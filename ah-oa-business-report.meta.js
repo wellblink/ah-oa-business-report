@@ -2,7 +2,7 @@
 // @name         报表导出
 // @description  用于经营报表自动导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.8
+// @version      1.4.9
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js

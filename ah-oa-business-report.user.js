@@ -2,7 +2,7 @@
 // @name         报表导出
 // @description  用于经营报表自动导出
 // @namespace    local.ahoa.bozhou.report
-// @version      1.4.8
+// @version      1.4.9
 // @homepageURL  https://github.com/wellblink/ah-oa-business-report
 // @updateURL    https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.meta.js
 // @downloadURL  https://cdn.jsdelivr.net/gh/wellblink/ah-oa-business-report@main/ah-oa-business-report.user.js
@@ -274,11 +274,10 @@
     .actions{display:flex;flex-direction:column;gap:var(--section-gap);margin-top:var(--section-gap)}.actions button,#status{display:flex;align-items:center;justify-content:center;width:100%;min-height:var(--control-height);padding:12px 14px;border-radius:var(--control-radius);font-size:var(--control-font-size);font-weight:500;line-height:22px}.primary{background:#007aff;color:#fff;box-shadow:0 2px 5px #007aff1c}.primary:hover:not(:disabled){background:#006eed}.secondary{color:#424247;background:#f0f0f3}.secondary:hover:not(:disabled){background:#e7e7ec}.danger{color:#d73535;background:#fff0f0}.danger:hover:not(:disabled){background:#ffe4e4}
     #status{gap:8px;color:#6e6e73;overflow-wrap:anywhere;text-align:center;margin-top:var(--section-gap);background:#f5f5f7}#status:empty{display:none}#status.success{color:#21834a;background:#edf8f1}#status.error{color:#c53232;background:#fff0f0}
     #close{position:absolute;right:16px;top:16px;width:30px;height:30px;padding:0;display:grid;place-items:center;border-radius:50%;color:#86868b;background:#f0f0f3}#close:hover{color:#424247;background:#e7e7ec}
-    #jobbar{display:none;position:fixed;right:24px;bottom:84px;z-index:2147483646;max-width:min(320px,calc(100vw - 32px));border:1px solid #e8e8ed;border-radius:16px;background:#fffffff5;color:#53535b;box-shadow:0 5px 24px #14213d1a;padding:13px 17px;font-size:13px;line-height:1.55;overflow-wrap:anywhere;pointer-events:none}
     #calendar{position:fixed;z-index:2;width:300px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;padding:17px;border:1px solid #e5e5eac9;border-radius:21px;background:#fff;box-shadow:0 14px 48px #14213d29,0 2px 7px #14213d0d}.cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:13px}.cal-head strong{font-size:15px;font-weight:650;letter-spacing:-.2px}.cal-nav{display:flex;gap:4px}.cal-nav button{width:30px;height:30px;display:grid;place-items:center;background:#f5f5f7;color:#68686e;border-radius:9px}.cal-nav button:hover{background:#eaf3ff;color:#007aff}.weekdays,#calDays{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}.weekdays{margin-bottom:6px}.weekdays span{text-align:center;color:#a0a0a7;font-size:11px;line-height:26px}#calDays button{height:32px;min-width:0;border-radius:9px;background:transparent;color:#303035;font-size:13px;font-variant-numeric:tabular-nums}#calDays button:hover{background:#f0f5ff;color:#007aff}#calDays button.outside{color:#c1c1c6}#calDays button.today{box-shadow:inset 0 0 0 1px #007aff55;color:#007aff}#calDays button.selected{background:#007aff;color:#fff;box-shadow:0 2px 5px #007aff26}.cal-footer{margin-top:13px;border-top:1px solid #f0f0f3;padding-top:11px;display:flex;justify-content:space-between;gap:12px}.cal-footer button{background:transparent;color:#007aff;padding:5px 8px;border-radius:7px;font-size:12px;font-weight:500}.cal-footer button:hover{background:#f0f5ff}
     @media(max-width:440px){#shade{padding:14px}#box{padding:24px 20px;border-radius:23px;max-height:calc(100dvh - 28px)}h2{font-size:21px}.heading{gap:11px}#entry{right:16px;bottom:18px}}
     @media(prefers-reduced-motion:reduce){*{transition:none!important}}
-  </style><button id="entry" title="拖动调整位置，点击导出" aria-label="报表导出">${icon('download',18)}<span>报表导出</span></button><div id="jobbar" role="status" aria-live="polite"></div><div id="shade"><section id="box" role="dialog" aria-modal="true" aria-labelledby="title">
+  </style><button id="entry" title="拖动调整位置，点击导出" aria-label="报表导出">${icon('download',18)}<span>报表导出</span></button><div id="shade"><section id="box" role="dialog" aria-modal="true" aria-labelledby="title">
     <button id="close" aria-label="关闭" title="关闭">${icon('close',16)}</button><div class="heading"><div class="mark">${icon('download',23)}</div><div><h2 id="title">报表导出</h2><p>选择报表与日期</p></div></div>
     <div class="field"><label for="reportType">报表类型</label><div class="control"><select id="reportType">${Object.entries(REPORTS).map(([key,r])=>`<option value="${key}">${r.name}</option>`).join('')}</select><span class="field-icon">${icon('chevron',18)}</span></div></div>
     <div class="field"><label for="start">开始日期</label><div class="control"><input id="start" type="text" inputmode="numeric" autocomplete="off" placeholder="YYYY-MM-DD" maxlength="10" required><button class="field-icon picker" id="pickStart" aria-label="选择开始日期" aria-haspopup="dialog" aria-expanded="false">${icon('calendar',18)}</button></div></div>
@@ -296,16 +295,8 @@
   const updateJob = (j, patch) => saveJob({...j, ...patch, updated:Date.now()});
   const isoDate=d=>`${String(d.getFullYear()).padStart(4,'0')}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   let calendarTarget=null, calendarMonth=null, calendarFocus=null;
-  function dateAllowed(target,date){
-    if(!validDate(date))return false;
-    const other=$('#'+(target==='start'?'end':'start')).value.trim();
-    return !validDate(other)||(target==='start'?date<=other:date>=other);
-  }
-  function calendarDate(date){
-    if(dateAllowed(calendarTarget,date))return date;
-    const other=$('#'+(calendarTarget==='start'?'end':'start')).value.trim();
-    return validDate(other)?other:isoDate(new Date());
-  }
+  function dateAllowed(_target,date){return validDate(date);}
+  function calendarDate(date){return validDate(date)?date:isoDate(new Date());}
   function closeCalendar(focus=false){
     const target=calendarTarget;calendarTarget=null;$('#calendar').hidden=true;
     $('#pickStart').setAttribute('aria-expanded','false');$('#pickEnd').setAttribute('aria-expanded','false');
@@ -380,7 +371,7 @@
     }
   };
   $('#shade').onclick=e=>{if(e.target===$('#shade'))hide();};
-  function hide(){closeCalendar();$('#shade').style.display='none';$('#entry').focus({preventScroll:true});if(currentJob?.message)$('#jobbar').style.display='block';}
+  function hide(){closeCalendar();$('#shade').style.display='none';$('#entry').focus({preventScroll:true});}
 
   // Pointer capture keeps dragging local to this one button; no idle polling.
   const entry=$('#entry'),savedPosition=GM_getValue('ahoa.export.buttonPosition',null);
@@ -425,8 +416,6 @@
     const display=message;
     $('#status').textContent=display;
     $('#status').className=display==='导出成功'?'success':error?'error':'';
-    $('#jobbar').textContent=display;
-    $('#jobbar').style.display=display&&$('#shade').style.display!=='flex'?'block':'none';
   }
   function status(message, error=false) {
     if (currentJob && readJob()?.id===currentJob.id) currentJob=updateJob(currentJob,{message});
@@ -434,7 +423,6 @@
   }
   function show() {
     $('#shade').style.display='flex';
-    $('#jobbar').style.display='none';
     $('#cancelTask').style.display=isLive(readJob())?'inline-flex':'none';
     const last=GM_getValue('ahoa.export.dates',{}), now=new Date();
     const today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
